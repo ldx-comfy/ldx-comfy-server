@@ -1,6 +1,13 @@
-def main():
-    print("Hello from yinghao-comfy-web!")
+from fastapi import FastAPI
+import gradio as gr
 
+app = FastAPI()
+
+with gr.Blocks() as demo:
+    gr.Markdown("Hi friends!")
+
+app = gr.mount_gradio_app(app, demo, path="")
 
 if __name__ == "__main__":
-    main()
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
