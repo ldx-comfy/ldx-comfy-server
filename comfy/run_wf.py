@@ -1,9 +1,13 @@
+import os
+import sys
+# 将当前文件所在目录添加到Python路径
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
 import websocket
 import uuid
 import json
 import urllib.request
 import urllib.parse
-import os
 import requests
 
 # ComfyUI服务器地址
@@ -128,42 +132,31 @@ def main():
     # 查找所有以 "Input" 结尾的节点
     input_nodes = find_input_nodes(prompt)
     
+    # 导入节点处理器
+    from nodes import handle_image_node, handle_text_node, handle_switch_node
+    
+    # 节点类型到处理函数的映射
+    node_handlers = {
+        'LoadImageOutput': handle_image_node,
+        'Text': handle_text_node,
+        'Switch any [Crystools]': handle_switch_node
+    }
+    
     # 处理输入节点
     for node_id, node_type in input_nodes.items():
         title = prompt[node_id]['_meta']['title']
-        if node_type == 'LoadImageOutput':
-            # 图像输入节点（只接受用户本地路径）
-            image_path = input(f"请输入节点 '{title}' 的本地图像路径: ")
+        handler = node_handlers.get(node_type)
+        
+        if handler:
+            # 特殊处理：图像节点需要额外参数
+            if node_type == 'LoadImageOutput':
+                result = handler(node_id, prompt[node_id], server_address)
+            else:
+                result = handler(node_id, prompt[node_id])
             
-            # 上传图片到服务器
-            print(f"正在上传图片到服务器: {image_path}")
-            try:
-                with open(image_path, 'rb') as f:
-                    files = {'image': (os.path.basename(image_path), f)}
-                    response = requests.post(f"http://{server_address}/upload/image", files=files)
-                
-                if response.status_code == 200:
-                    result = response.json()
-                    # ComfyUI返回的路径格式为 "filename [type]"
-                    server_path = f"{result['name']} [input]"
-                    print(f"图片已上传到服务器: {server_path}")
-                    prompt[node_id]['inputs']['image'] = server_path
-                else:
-                    print(f"上传失败: {response.status_code} - {response.text}")
-                    # 上传失败时使用原始路径
-                    prompt[node_id]['inputs']['image'] = image_path
-            except Exception as e:
-                print(f"上传出错: {str(e)}")
-                # 出错时使用原始路径
-                prompt[node_id]['inputs']['image'] = image_path
-        elif node_type == 'Text':
-            # 文本输入节点
-            text = input(f"请输入节点 '{title}' 的文本: ")
-            prompt[node_id]['inputs']['text'] = text
-        elif node_type == 'Switch any [Crystools]':
-            # 布尔值输入节点
-            boolean_value = input(f"请输入节点 '{title}' 的布尔值 (true/false): ")
-            prompt[node_id]['inputs']['boolean'] = boolean_value.lower() == 'true'
+            # 更新节点输入
+            for key, value in result.items():
+                prompt[node_id]['inputs'][key] = value
         else:
             print(f"警告: 未知的输入节点类型 '{node_type}'")
 
@@ -175,7 +168,6 @@ def main():
     print("工作流执行完毕，图像已保存。")
     
     ws.close()
-
 if __name__ == "__main__":
     # 安装依赖: pip install websocket-client
     main()
