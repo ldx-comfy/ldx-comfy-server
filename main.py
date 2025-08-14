@@ -1,12 +1,8 @@
 from fastapi import FastAPI
 import gradio as gr
+from routers import include_routers
 
-app = FastAPI()
-
-with gr.Blocks() as demo:
-    gr.Markdown("Hi friends!")
-
-app = gr.mount_gradio_app(app, demo, path="")
+app = include_routers(FastAPI())
 
 if __name__ == "__main__":
     import uvicorn
