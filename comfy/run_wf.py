@@ -157,7 +157,7 @@ def run_workflow(input_values=None):
                         if 'text' in input_key:
                             prompt[node_id]['inputs'][input_key] = value
     else:
-        # 导入节点处理器
+        # 导入节点处理器 - 使用绝对导入
         from comfy.nodes import handle_image_node, handle_text_node, handle_switch_node
         
         # 节点类型到处理函数的映射
@@ -175,7 +175,7 @@ def run_workflow(input_values=None):
                 if node_type == 'LoadImageOutput':
                     # 从input_values中获取图像数据（如果存在）
                     image_data = input_values.get(node_id) if input_values else None
-                    result = handler(node_id, prompt[node_id], server_address, image_data)
+                    result = handler(node_id, prompt[node_id], server_address)
                 else:
                     # 对于其他节点类型，直接处理
                     result = handler(node_id, prompt[node_id])
