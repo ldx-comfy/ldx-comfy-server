@@ -1,7 +1,9 @@
 import os
 import sys
-# 将当前文件所在目录添加到Python路径
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
+# 将项目根目录添加到Python路径，以支持直接运行脚本
+_root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _root_dir)
 
 import websocket
 import uuid
@@ -9,8 +11,10 @@ import json
 import urllib.request
 import urllib.parse
 
+from comfy.get_wfs import get_wf, get_wf_list
+
 # ComfyUI服务器地址
-server_address = "42.194.228.252:6889"
+server_address = "106.52.220.169:6889"
 # 客户端ID，用于标识连接
 client_id = str(uuid.uuid4())
 # 图像输出目录
@@ -118,18 +122,18 @@ def get_images(ws, prompt):
 
     return output_images
 
-def run_workflow(input_values=None):
+def run_workflow(wf_name: str, input_values=None):
     """
     执行工作流并返回生成的图像路径
     
     Args:
+        wf_name (str): 工作流文件名 (不带扩展名).
         input_values (dict): 输入节点ID到输入值的映射
     """
     try:
-        with open('workflow_api.json', 'r', encoding='utf-8') as f:
-            prompt = json.load(f)
+        prompt = get_wf(wf_name)
     except FileNotFoundError:
-        print("错误: 'workflow_api.json' 未找到。")
+        print(f"错误: 工作流 '{wf_name}.json' 未找到。")
         return []
     except json.JSONDecodeError as e:
         print(f"JSON解析错误: {str(e)}")
@@ -202,7 +206,26 @@ def run_workflow(input_values=None):
         return []
 
 def main():
-    run_workflow()
+    """
+    主函数，用于测试工作流执行。
+    """
+    # 获取可用的工作流列表
+    available_workflows = get_wf_list()
+    print(f"可用的工作流: {available_workflows}")
+
+    # 运行 'test' 工作流作为示例
+    if "test.json" in available_workflows:
+        wf_to_run = 'test'
+        print(f"\n正在运行 '{wf_to_run}' 工作流...")
+        images = run_workflow(wf_to_run)
+        if images:
+            print(f"成功生成图像: {images}")
+        else:
+            print(f"'{wf_to_run}' 工作流执行失败或未生成图像。")
+    else:
+        print("\n'test.json' 工作流未找到，请检查 `wf_files` 目录。")
+
 if __name__ == "__main__":
-    # 安装依赖: pip install websocket-client
+    # 要直接运行此脚本进行测试，请确保从项目根目录运行:
+    # python -m comfy.run_wf
     main()
