@@ -1,5 +1,4 @@
 from fastapi import FastAPI
-import gradio as gr
 from routers import include_routers
 
 app = include_routers(FastAPI())
