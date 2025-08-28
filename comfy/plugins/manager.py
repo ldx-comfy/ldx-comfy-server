@@ -6,6 +6,10 @@ import pkgutil
 import inspect
 from typing import Dict, Any, List, Type, Optional
 from .base import Plugin, NodeHandlerPlugin, WorkflowExecutorPlugin, plugin_registry
+from ..logging_config import get_colorful_logger
+
+# 配置彩色日志
+logger = get_colorful_logger(__name__)
 
 
 class PluginManager:
@@ -27,7 +31,7 @@ class PluginManager:
         try:
             package = importlib.import_module(package_name)
         except ImportError:
-            print(f"无法导入包: {package_name}")
+            logger.warning(f"无法导入包: {package_name}")
             return
 
         # 遍历包中的所有模块
@@ -37,7 +41,7 @@ class PluginManager:
                     module = importlib.import_module(module_name)
                     self._register_plugins_from_module(module)
                 except Exception as e:
-                    print(f"加载模块 {module_name} 时出错: {e}")
+                    logger.error(f"加载模块 {module_name} 时出错: {e}")
 
         # 直接从当前模块注册插件
         self._register_plugins_from_module(package)
@@ -56,9 +60,9 @@ class PluginManager:
                     plugin_instance = obj()
                     # 注册插件
                     plugin_registry.register_plugin(plugin_instance)
-                    print(f"已注册插件: {plugin_instance.metadata.name} ({plugin_instance.metadata.plugin_type})")
+                    logger.info(f"已注册插件: {plugin_instance.metadata.name} ({plugin_instance.metadata.plugin_type})")
                 except Exception as e:
-                    print(f"注册插件 {name} 时出错: {e}")
+                    logger.error(f"注册插件 {name} 时出错: {e}")
 
     def initialize_plugins(self, config: Dict[str, Any]) -> None:
         """初始化所有已注册的插件"""
@@ -66,7 +70,7 @@ class PluginManager:
             try:
                 plugin.initialize(config)
             except Exception as e:
-                print(f"初始化插件 {plugin.metadata.name} 时出错: {e}")
+                logger.error(f"初始化插件 {plugin.metadata.name} 时出错: {e}")
 
     def cleanup_plugins(self) -> None:
         """清理所有插件"""
@@ -74,7 +78,7 @@ class PluginManager:
             try:
                 plugin.cleanup()
             except Exception as e:
-                print(f"清理插件 {plugin.metadata.name} 时出错: {e}")
+                logger.error(f"清理插件 {plugin.metadata.name} 时出错: {e}")
 
     def get_node_handler(self, node_type: str) -> NodeHandlerPlugin:
         """获取适合处理指定节点类型的处理器"""

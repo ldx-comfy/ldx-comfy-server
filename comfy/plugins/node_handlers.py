@@ -5,6 +5,10 @@ import os
 import requests
 from typing import Dict, Any, List
 from .base import NodeHandlerPlugin, PluginMetadata
+from ..logging_config import get_colorful_logger
+
+# 配置彩色日志
+logger = get_colorful_logger(__name__)
 
 
 class ImageInputHandler(NodeHandlerPlugin):
@@ -43,7 +47,7 @@ class ImageInputHandler(NodeHandlerPlugin):
         if not image_path:
             raise ValueError(f"节点 '{title}' 需要提供 image_path 参数")
 
-        print(f"正在上传图片到服务器: {image_path}")
+        logger.info(f"正在上传图片到服务器: {image_path}")
 
         try:
             with open(image_path, 'rb') as f:
@@ -53,13 +57,13 @@ class ImageInputHandler(NodeHandlerPlugin):
             if response.status_code == 200:
                 result = response.json()
                 server_path = f"{result['name']} [input]"
-                print(f"图片已上传到服务器: {server_path}")
+                logger.info(f"图片已上传到服务器: {server_path}")
                 return {'image': server_path}
             else:
-                print(f"上传失败: {response.status_code} - {response.text}")
+                logger.error(f"上传失败: {response.status_code} - {response.text}")
                 return {'image': image_path}
         except Exception as e:
-            print(f"上传出错: {str(e)}")
+            logger.error(f"上传出错: {str(e)}")
             return {'image': image_path}
 
     def get_required_inputs(self) -> List[str]:

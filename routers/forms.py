@@ -26,13 +26,13 @@ class WorkflowExecutionResponse(BaseModel):
 
 
 @router.get("/workflows", response_model=List[str])
-def get_available_workflows():
+async def get_available_workflows():
     """获取可用工作流列表"""
     return get_wf_list()
 
 
 @router.get("/workflows/{workflow_id}/form-schema")
-def get_workflow_form_schema(workflow_id: str):
+async def get_workflow_form_schema(workflow_id: str):
     """获取工作流表单模式"""
     try:
         params = get_wf_params(workflow_id)
@@ -91,7 +91,7 @@ async def execute_workflow_with_form(
 
 
 @router.get("/executions/{execution_id}/status", response_model=WorkflowExecutionResponse)
-def get_execution_status(execution_id: str):
+async def get_execution_status(execution_id: str):
     """获取执行状态"""
     try:
         executor = plugin_manager.get_workflow_executor()
@@ -109,7 +109,7 @@ def get_execution_status(execution_id: str):
 
 
 @router.delete("/executions/{execution_id}")
-def cancel_execution(execution_id: str):
+async def cancel_execution(execution_id: str):
     """取消执行"""
     try:
         executor = plugin_manager.get_workflow_executor()

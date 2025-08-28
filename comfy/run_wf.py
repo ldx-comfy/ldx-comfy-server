@@ -12,6 +12,10 @@ import urllib.request
 import urllib.parse
 
 from comfy.get_wfs import get_wf, get_wf_list
+from comfy.logging_config import get_colorful_logger
+
+# 配置彩色日志
+logger = get_colorful_logger(__name__)
 
 # ComfyUI服务器地址
 server_address = "106.52.220.169:6889"
@@ -133,10 +137,10 @@ def run_workflow(wf_name: str, input_values=None):
     try:
         prompt = get_wf(wf_name)
     except FileNotFoundError:
-        print(f"错误: 工作流 '{wf_name}.json' 未找到。")
+        logger.error(f"错误: 工作流 '{wf_name}.json' 未找到。")
         return []
     except json.JSONDecodeError as e:
-        print(f"JSON解析错误: {str(e)}")
+        logger.error(f"JSON解析错误: {str(e)}")
         return []
     
     # 查找所有以 "Input" 结尾的节点
@@ -187,20 +191,20 @@ def run_workflow(wf_name: str, input_values=None):
                 for key, value in result.items():
                     prompt[node_id]['inputs'][key] = value
             else:
-                print(f"警告: 未知的输入节点类型 '{node_type}'")
+                logger.warning(f"警告: 未知的输入节点类型 '{node_type}'")
 
     try:
         ws = websocket.WebSocket()
         ws.connect(f"ws://{server_address}/ws?clientId={client_id}")
-        
-        print("正在执行工作流...")
+
+        logger.info("正在执行工作流...")
         images = get_images(ws, prompt)
-        print("工作流执行完毕，图像已保存。")
-        
+        logger.info("工作流执行完毕，图像已保存。")
+
         ws.close()
         return images
     except Exception as e:
-        print(f"工作流执行错误: {str(e)}")
+        logger.error(f"工作流执行错误: {str(e)}")
         import traceback
         traceback.print_exc()
         return []
@@ -211,19 +215,19 @@ def main():
     """
     # 获取可用的工作流列表
     available_workflows = get_wf_list()
-    print(f"可用的工作流: {available_workflows}")
+    logger.info(f"可用的工作流: {available_workflows}")
 
     # 运行 'test' 工作流作为示例
     if "test.json" in available_workflows:
         wf_to_run = 'test'
-        print(f"\n正在运行 '{wf_to_run}' 工作流...")
+        logger.info(f"\n正在运行 '{wf_to_run}' 工作流...")
         images = run_workflow(wf_to_run)
         if images:
-            print(f"成功生成图像: {images}")
+            logger.info(f"成功生成图像: {images}")
         else:
-            print(f"'{wf_to_run}' 工作流执行失败或未生成图像。")
+            logger.warning(f"'{wf_to_run}' 工作流执行失败或未生成图像。")
     else:
-        print("\n'test.json' 工作流未找到，请检查 `wf_files` 目录。")
+        logger.warning("\n'test.json' 工作流未找到，请检查 `wf_files` 目录。")
 
 if __name__ == "__main__":
     # 要直接运行此脚本进行测试，请确保从项目根目录运行:

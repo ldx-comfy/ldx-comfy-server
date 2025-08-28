@@ -1,6 +1,10 @@
 # 从./wf_files目录下获取所有工作流文件
 import os
 import json
+from comfy.logging_config import get_colorful_logger
+
+# 配置彩色日志
+logger = get_colorful_logger(__name__)
 
 # 获取此文件所在的目录，并构建到 `wf_files` 目录的绝对路径
 _current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -13,7 +17,7 @@ def get_wf_list():
     wf_list = []
     # 确保 `wf_files` 目录存在
     if not os.path.isdir(_wf_files_dir):
-        print(f"警告: 工作流目录 '{_wf_files_dir}' 未找到。")
+        logger.warning(f"警告: 工作流目录 '{_wf_files_dir}' 未找到。")
         return []
         
     for file in os.listdir(_wf_files_dir):
@@ -36,10 +40,10 @@ def get_wf(wf_id: str) -> dict:
         with open(wf_path, 'r', encoding='utf-8') as f:
             return json.load(f)
     except FileNotFoundError:
-        print(f"错误: 工作流文件 '{wf_path}' 未找到。")
+        logger.error(f"错误: 工作流文件 '{wf_path}' 未找到。")
         raise
     except json.JSONDecodeError as e:
-        print(f"错误: 解析工作流文件 '{wf_path}' 时出错: {e}")
+        logger.error(f"错误: 解析工作流文件 '{wf_path}' 时出错: {e}")
         raise
 
 def get_wf_params(wf_id: str) -> list:

@@ -11,13 +11,13 @@ class WorkflowParam(BaseModel):
     class_type: str = Field(..., description="节点类型")
 
 @router.get("/list", response_model=List[str])
-def get_workflow_list():
+async def get_workflow_list():
     """获取所有WorkFlow列表:./wf_fils/*.json
     """
     return get_wfs.get_wf_list()
 
 @router.get("/wf/{wf_id}/params", response_model=List[WorkflowParam])
-def get_wf_params(wf_id: str):
+async def get_wf_params(wf_id: str):
     """获取指定WorkFlow需要的参数列表
     """
     return get_wfs.get_wf_params(wf_id)
