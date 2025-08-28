@@ -2,6 +2,7 @@
 表单式API路由
 """
 from typing import Dict, Any, List, Optional
+import json
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from pydantic import BaseModel, Field
 from comfy.plugins import plugin_manager
@@ -61,23 +62,31 @@ async def get_workflow_form_schema(workflow_id: str):
         raise HTTPException(status_code=404, detail=f"获取工作流 '{workflow_id}' 表单模式失败: {str(e)}")
 
 
-@router.post("/workflows/execute", response_model=WorkflowExecutionResponse)
+@router.post("/workflows/{workflow_id}/execute", response_model=WorkflowExecutionResponse)
 async def execute_workflow_with_form(
-    workflow_id: str = Form(..., description="工作流ID"),
-    files: Optional[List[UploadFile]] = File(None, description="上传的文件")
+    workflow_id: str,
+    nodes: str = Form(..., description="节点数据，格式: [{node},{node}, ...]")
 ):
     """通过表单执行工作流"""
     try:
         # 获取工作流数据
         workflow_data = get_wf(workflow_id)
 
-        # 处理输入参数（这里简化处理，实际需要根据表单数据构建inputs）
+        # 解析节点数据
+        nodes_data = json.loads(nodes)
+
+        # 构建输入参数
         inputs = {}
+        for node in nodes_data:
+            node_id = node.get("node_id")
+            value = node.get("value", "")
+            if node_id:
+                inputs[node_id] = value
 
         # 获取工作流执行器
         executor = plugin_manager.get_workflow_executor()
 
-        # 执行工作流
+        # 执行工作流（节点内容交由插件处理）
         result = executor.execute_workflow(workflow_data, inputs)
 
         return WorkflowExecutionResponse(
@@ -86,6 +95,8 @@ async def execute_workflow_with_form(
             result=result
         )
 
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="节点数据格式错误，应为JSON格式")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"执行工作流失败: {str(e)}")
 
