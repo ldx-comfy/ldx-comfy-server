@@ -3,10 +3,9 @@
 """
 import urllib.request
 import urllib.error
-import json
 import time
 from typing import Dict, Any
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 from pydantic import BaseModel
 from datetime import datetime
 
@@ -92,7 +91,6 @@ async def check_comfyui_health() -> ComfyUIStatus:
         # 如果无法获取，抛出错误
         raise ValueError(f"无法获取ComfyUI服务器地址: {str(e)}")
 
-    import time
     start_time = time.time()
 
     try:
@@ -101,9 +99,9 @@ async def check_comfyui_health() -> ComfyUIStatus:
 
         req = urllib.request.Request(url, method='GET')
 
-        with urllib.request.urlopen(req, timeout=5) as response:
+        with urllib.request.urlopen(req, timeout=5) :# as response:
             response_time = (time.time() - start_time) * 1000
-            response_data = json.loads(response.read().decode('utf-8'))
+            #response_data = json.loads(response.read().decode('utf-8'))
 
             return ComfyUIStatus(
                 status="connected",
