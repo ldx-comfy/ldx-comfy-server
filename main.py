@@ -49,7 +49,7 @@ async def lifespan(app: FastAPI):
 
     # 初始化插件配置
     config = {
-        'server_address': '118.195.246.241:6889',
+        'server_address': '127.0.0.1:8000',
         'output_dir': 'comfy_out_image'
     }
     plugin_manager.initialize_plugins(config)
@@ -70,4 +70,4 @@ app = include_routers(FastAPI(lifespan=lifespan))
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000,reload=True,workers=1)
+    uvicorn.run("main:app", host="0.0.0.0", port=1145,reload=True,workers=1)
