@@ -26,11 +26,14 @@ output_dir = "comfy_out_image"
 
 def find_input_nodes(prompt):
     """
-    查找所有以 "Input" 结尾的节点
-    
+    查找输入节点:
+    - 标题以 " Input"（空格+Input）结尾，或
+    - 标题以 "-Input" 结尾（兼容中文等命名: 例如 "输入原图-Input"）
+    避免将 "NoInput" 之类错误匹配为输入节点
+
     Args:
         prompt (dict): 从JSON文件加载的工作流
-        
+
     Returns:
         dict: 包含输入节点ID和类型的字典
     """
@@ -38,7 +41,7 @@ def find_input_nodes(prompt):
     for node_id, node_info in prompt.items():
         if '_meta' in node_info and 'title' in node_info['_meta']:
             title = node_info['_meta']['title']
-            if title.endswith('Input'):
+            if title.endswith(' Input') or title.endswith('-Input'):
                 input_nodes[node_id] = node_info['class_type']
     return input_nodes
 
