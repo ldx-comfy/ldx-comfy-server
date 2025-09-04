@@ -94,14 +94,48 @@ async def execute_workflow_with_form(
         nodes_data = json.loads(nodes)
         logging.debug(f"解析到 {len(nodes_data)} 个节点")
 
-        # 构建输入参数
-        inputs = {}
-        for node in nodes_data:
+        # 构建输入参数（仅接受映射类型，避免将字符串作为 **kwargs 传入）
+        inputs: Dict[str, Any] = {}
+        for idx, node in enumerate(nodes_data):
             node_id = node.get("node_id")
-            value = node.get("value", "")
-            if node_id:
-                inputs[node_id] = value
-                logging.debug(f"设置输入参数: {node_id} = {value}")
+            class_type = node.get("class_type")
+            has_value = "value" in node
+            raw_value = node.get("value", None)
+
+            logging.debug(
+                "解析节点[%s] node_id=%s class_type=%s has_value=%s raw_type=%s raw_preview=%s",
+                idx, node_id, class_type, has_value, type(raw_value).__name__, str(raw_value)[:200]
+            )
+
+            # 忽略没有 node_id 或没有提供 value 的节点（避免覆盖默认 workflow 配置）
+            if not node_id or not has_value:
+                continue
+
+            # 空字符串/None 视为未提供，跳过（避免把 "" 当成 **kwargs）
+            if raw_value in ("", None):
+                logging.debug("跳过空值节点: node_id=%s", node_id)
+                continue
+
+            value = raw_value
+
+            # 若 value 不是映射，尝试根据 class_type 做最小化推断；否则跳过
+            if not isinstance(value, dict):
+                if class_type == "Text":
+                    value = {"text": value}
+                elif class_type == "LoadImageOutput":
+                    value = {"image": value}
+                elif class_type == "Switch any [Crystools]":
+                    if isinstance(value, bool):
+                        value = {"boolean": value}
+                    else:
+                        logging.debug("无法从非布尔值推断 Switch any 的映射, 跳过 node_id=%s", node_id)
+                        continue
+                else:
+                    logging.debug("未知 class_type 且 value 非映射，跳过 node_id=%s", node_id)
+                    continue
+
+            inputs[str(node_id)] = value
+            logging.debug("设置输入参数: node_id=%s value_type=%s value=%s", node_id, type(value).__name__, value)
 
         # 获取工作流执行器
         logging.debug("获取工作流执行器")
