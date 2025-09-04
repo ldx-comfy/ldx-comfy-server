@@ -8,6 +8,7 @@ from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from pydantic import BaseModel, Field
 from comfy.plugins import plugin_manager
 from comfy.get_wfs import get_wf_list, get_wf_params, get_wf
+from starlette.concurrency import run_in_threadpool
 
 
 router = APIRouter(prefix="/api/v1/forms", tags=["表单工作流"])
@@ -120,7 +121,8 @@ async def execute_workflow_with_form(
 
             # 若 value 不是映射，尝试根据 class_type 做最小化推断；否则跳过
             if not isinstance(value, dict):
-                if class_type == "Text":
+                # 文本类输入（支持 CLIPTextEncode 及其变体）
+                if class_type == "Text" or (isinstance(class_type, str) and "CLIPTextEncode" in class_type):
                     value = {"text": value}
                 elif class_type == "LoadImageOutput":
                     value = {"image": value}
@@ -143,9 +145,10 @@ async def execute_workflow_with_form(
 
         # 执行工作流（节点内容交由插件处理）
         logging.info(f"开始执行工作流 '{workflow_id}'，输入参数数量: {len(inputs)}")
-        result = executor.execute_workflow(workflow_data, inputs)
+        # 在线程池中执行阻塞型工作，防止阻塞事件循环造成后端“卡住”
+        result = await run_in_threadpool(executor.execute_workflow, workflow_data, inputs)
         logging.info(f"工作流 '{workflow_id}' 执行完成，执行ID: {result['execution_id']}，状态: {result['status']}")
-
+ 
         return WorkflowExecutionResponse(
             execution_id=result["execution_id"],
             status=result["status"],
@@ -214,6 +217,7 @@ def _get_field_type(class_type: str) -> str:
     type_mapping = {
         "LoadImageOutput": "file",
         "Text": "text",
+        "CLIPTextEncode": "text",
         "Switch any [Crystools]": "boolean"
     }
     field_type = type_mapping.get(class_type, "text")

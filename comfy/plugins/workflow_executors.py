@@ -127,9 +127,25 @@ class ComfyUIWorkflowExecutor(WorkflowExecutorPlugin):
             node_info = processed_workflow[node_id]
             node_inputs = inputs.get(node_id, {})
 
+            # 没有提供该节点的输入值则跳过，避免处理器抛出必填参数错误，保持workflow默认值
+            if not node_inputs:
+                continue
+
+            # 校验必填键是否齐全
+            required_keys = []
+            if node_type == 'LoadImageOutput':
+                required_keys = getattr(image_handler, 'get_required_inputs', lambda: [])()
+            elif node_type == 'Text' or node_type == 'CLIPTextEncode' or ('CLIPTextEncode' in str(node_type)):
+                required_keys = getattr(text_handler, 'get_required_inputs', lambda: [])()
+            elif node_type == 'Switch any [Crystools]':
+                required_keys = getattr(switch_handler, 'get_required_inputs', lambda: [])()
+            # 如缺失必填输入，跳过该节点
+            if required_keys and any(k not in node_inputs for k in required_keys):
+                continue
+
             if node_type == 'LoadImageOutput':
                 result = image_handler.handle_node(node_id, node_info, **node_inputs)
-            elif node_type == 'Text':
+            elif node_type == 'Text' or node_type == 'CLIPTextEncode' or ('CLIPTextEncode' in str(node_type)):
                 result = text_handler.handle_node(node_id, node_info, **node_inputs)
             elif node_type == 'Switch any [Crystools]':
                 result = switch_handler.handle_node(node_id, node_info, **node_inputs)
@@ -158,10 +174,14 @@ class ComfyUIWorkflowExecutor(WorkflowExecutorPlugin):
         # 队列工作流
         prompt_id = self._queue_prompt(workflow_data)['prompt_id']
 
-        # 创建WebSocket连接
+        # 创建WebSocket连接（增加超时，避免卡死）
         ws = websocket.WebSocket()
-        ws.connect(f"ws://{self.server_address}/ws?clientId={self.client_id}")
-
+        try:
+            ws.settimeout(60)
+        except Exception:
+            pass
+        ws.connect(f"ws://{self.server_address}/ws?clientId={self.client_id}", timeout=60)
+ 
         output_images = []
 
         try:
@@ -194,7 +214,7 @@ class ComfyUIWorkflowExecutor(WorkflowExecutorPlugin):
         p = {"prompt": prompt, "client_id": self.client_id}
         data = json.dumps(p).encode('utf-8')
         req = urllib.request.Request(f"http://{self.server_address}/prompt", data=data)
-        return json.loads(urllib.request.urlopen(req).read())
+        return json.loads(urllib.request.urlopen(req, timeout=60).read())
 
     def _get_image(self, filename: str, subfolder: str, folder_type: str) -> str:
         """下载图像"""
@@ -203,14 +223,14 @@ class ComfyUIWorkflowExecutor(WorkflowExecutorPlugin):
 
         data = {"filename": filename, "subfolder": subfolder, "type": folder_type}
         url_values = urllib.parse.urlencode(data)
-        with urllib.request.urlopen(f"http://{self.server_address}/view?{url_values}") as response:
+        with urllib.request.urlopen(f"http://{self.server_address}/view?{url_values}", timeout=120) as response:
             with open(filepath, 'wb') as f:
                 f.write(response.read())
         return filepath
 
     def _get_history(self, prompt_id: str) -> Dict[str, Any]:
         """获取执行历史"""
-        with urllib.request.urlopen(f"http://{self.server_address}/history/{prompt_id}") as response:
+        with urllib.request.urlopen(f"http://{self.server_address}/history/{prompt_id}", timeout=60) as response:
             return json.loads(response.read())
 
 

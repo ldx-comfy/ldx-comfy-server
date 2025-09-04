@@ -1,4 +1,6 @@
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 from routers import include_routers
 from comfy.plugins import plugin_manager
 from comfy.logging_config import get_colorful_logger
@@ -49,7 +51,7 @@ async def lifespan(app: FastAPI):
 
     # 初始化插件配置
     config = {
-        'server_address': '127.0.0.1:8000',
+        'server_address': '1.15.138.41:6889',
         'output_dir': 'comfy_out_image'
     }
     plugin_manager.initialize_plugins(config)
@@ -68,6 +70,27 @@ async def lifespan(app: FastAPI):
 # 创建FastAPI应用
 app = include_routers(FastAPI(lifespan=lifespan))
 
+# CORS 配置：允许前端开发服务器跨域访问（Astro dev: http://localhost:4321）
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:4321",
+        "http://127.0.0.1:4321",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost",
+        "http://127.0.0.1",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["*"],
+)
+
+# 静态文件: 暴露生成图片目录以供前端直接访问
+# 例如: http://127.0.0.1:1145/comfy_out_image/ComfyUI_00002_.png
+app.mount("/comfy_out_image", StaticFiles(directory="comfy_out_image"), name="comfy_out_image")
+ 
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=1145,reload=True,workers=1)
