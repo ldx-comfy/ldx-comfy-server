@@ -3,6 +3,7 @@
 """
 from typing import Dict, Any, List, Optional
 import json
+import logging
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from pydantic import BaseModel, Field
 from comfy.plugins import plugin_manager
@@ -29,14 +30,24 @@ class WorkflowExecutionResponse(BaseModel):
 @router.get("/workflows", response_model=List[str])
 async def get_available_workflows():
     """获取可用工作流列表"""
-    return get_wf_list()
+    logging.info("开始获取可用工作流列表")
+    try:
+        workflows = get_wf_list()
+        logging.info(f"成功获取 {len(workflows)} 个工作流")
+        return workflows
+    except Exception as e:
+        logging.error(f"获取可用工作流列表失败: {str(e)}")
+        raise
 
 
 @router.get("/workflows/{workflow_id}/form-schema")
 async def get_workflow_form_schema(workflow_id: str):
     """获取工作流表单模式"""
+    logging.info(f"开始获取工作流 '{workflow_id}' 的表单模式")
     try:
+        logging.debug(f"获取工作流 '{workflow_id}' 的参数")
         params = get_wf_params(workflow_id)
+        logging.debug(f"获取工作流 '{workflow_id}' 的数据")
         workflow_data = get_wf(workflow_id)
 
         # 构建表单模式
@@ -46,6 +57,7 @@ async def get_workflow_form_schema(workflow_id: str):
             "fields": []
         }
 
+        logging.debug(f"为工作流 '{workflow_id}' 构建表单模式，参数数量: {len(params)}")
         for param in params:
             field = {
                 "node_id": param["node_id"],
@@ -55,10 +67,13 @@ async def get_workflow_form_schema(workflow_id: str):
                 "required": True
             }
             form_schema["fields"].append(field)
+            logging.debug(f"添加字段: {field['title']} (类型: {field['type']})")
 
+        logging.info(f"成功构建工作流 '{workflow_id}' 的表单模式，字段数量: {len(form_schema['fields'])}")
         return form_schema
 
     except Exception as e:
+        logging.error(f"获取工作流 '{workflow_id}' 表单模式失败: {str(e)}")
         raise HTTPException(status_code=404, detail=f"获取工作流 '{workflow_id}' 表单模式失败: {str(e)}")
 
 
@@ -68,12 +83,16 @@ async def execute_workflow_with_form(
     nodes: str = Form(..., description="节点数据，格式: [{node},{node}, ...]")
 ):
     """通过表单执行工作流"""
+    logging.info(f"开始通过表单执行工作流 '{workflow_id}'")
     try:
         # 获取工作流数据
+        logging.debug(f"获取工作流 '{workflow_id}' 的数据")
         workflow_data = get_wf(workflow_id)
 
         # 解析节点数据
+        logging.debug("解析节点数据")
         nodes_data = json.loads(nodes)
+        logging.debug(f"解析到 {len(nodes_data)} 个节点")
 
         # 构建输入参数
         inputs = {}
@@ -82,12 +101,16 @@ async def execute_workflow_with_form(
             value = node.get("value", "")
             if node_id:
                 inputs[node_id] = value
+                logging.debug(f"设置输入参数: {node_id} = {value}")
 
         # 获取工作流执行器
+        logging.debug("获取工作流执行器")
         executor = plugin_manager.get_workflow_executor()
 
         # 执行工作流（节点内容交由插件处理）
+        logging.info(f"开始执行工作流 '{workflow_id}'，输入参数数量: {len(inputs)}")
         result = executor.execute_workflow(workflow_data, inputs)
+        logging.info(f"工作流 '{workflow_id}' 执行完成，执行ID: {result['execution_id']}，状态: {result['status']}")
 
         return WorkflowExecutionResponse(
             execution_id=result["execution_id"],
@@ -95,18 +118,27 @@ async def execute_workflow_with_form(
             result=result
         )
 
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as e:
+        logging.error(f"节点数据JSON解析错误: {str(e)}")
         raise HTTPException(status_code=400, detail="节点数据格式错误，应为JSON格式")
     except Exception as e:
+        logging.error(f"执行工作流 '{workflow_id}' 失败: {str(e)}")
         raise HTTPException(status_code=500, detail=f"执行工作流失败: {str(e)}")
 
 
 @router.get("/executions/{execution_id}/status", response_model=WorkflowExecutionResponse)
 async def get_execution_status(execution_id: str):
     """获取执行状态"""
+    logging.info(f"开始获取执行 '{execution_id}' 的状态")
     try:
+        logging.debug("获取工作流执行器")
         executor = plugin_manager.get_workflow_executor()
+        logging.debug(f"查询执行 '{execution_id}' 的状态")
         status = executor.get_execution_status(execution_id)
+
+        logging.info(f"执行 '{execution_id}' 状态: {status['status']}")
+        if status.get("error"):
+            logging.warning(f"执行 '{execution_id}' 存在错误: {status['error']}")
 
         return WorkflowExecutionResponse(
             execution_id=execution_id,
@@ -116,30 +148,40 @@ async def get_execution_status(execution_id: str):
         )
 
     except Exception as e:
+        logging.error(f"获取执行 '{execution_id}' 状态失败: {str(e)}")
         raise HTTPException(status_code=404, detail=f"获取执行状态失败: {str(e)}")
 
 
 @router.delete("/executions/{execution_id}")
 async def cancel_execution(execution_id: str):
     """取消执行"""
+    logging.info(f"开始取消执行 '{execution_id}'")
     try:
+        logging.debug("获取工作流执行器")
         executor = plugin_manager.get_workflow_executor()
+        logging.debug(f"尝试取消执行 '{execution_id}'")
         success = executor.cancel_execution(execution_id)
 
         if success:
+            logging.info(f"执行 '{execution_id}' 已成功取消")
             return {"message": f"执行 '{execution_id}' 已取消"}
         else:
+            logging.warning(f"无法取消执行 '{execution_id}'")
             raise HTTPException(status_code=400, detail="无法取消执行")
 
     except Exception as e:
+        logging.error(f"取消执行 '{execution_id}' 失败: {str(e)}")
         raise HTTPException(status_code=500, detail=f"取消执行失败: {str(e)}")
 
 
 def _get_field_type(class_type: str) -> str:
     """根据节点类型获取表单字段类型"""
+    logging.debug(f"获取字段类型映射，class_type: {class_type}")
     type_mapping = {
         "LoadImageOutput": "file",
         "Text": "text",
         "Switch any [Crystools]": "boolean"
     }
-    return type_mapping.get(class_type, "text")
+    field_type = type_mapping.get(class_type, "text")
+    logging.debug(f"映射结果: {class_type} -> {field_type}")
+    return field_type
