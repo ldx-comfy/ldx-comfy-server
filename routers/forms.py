@@ -4,6 +4,8 @@
 from typing import Dict, Any, List, Optional
 import json
 import logging
+import os
+import uuid
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from pydantic import BaseModel, Field
 from comfy.plugins import plugin_manager
@@ -81,7 +83,8 @@ async def get_workflow_form_schema(workflow_id: str):
 @router.post("/workflows/{workflow_id}/execute", response_model=WorkflowExecutionResponse)
 async def execute_workflow_with_form(
     workflow_id: str,
-    nodes: str = Form(..., description="节点数据，格式: [{node},{node}, ...]")
+    nodes: str = Form(..., description="节点数据，格式: [{node},{node}, ...]"),
+    files: Optional[List[UploadFile]] = File(None)
 ):
     """通过表单执行工作流"""
     logging.info(f"开始通过表单执行工作流 '{workflow_id}'")
@@ -94,6 +97,27 @@ async def execute_workflow_with_form(
         logging.debug("解析节点数据")
         nodes_data = json.loads(nodes)
         logging.debug(f"解析到 {len(nodes_data)} 个节点")
+
+        # 处理上传的文件，将其保存到服务器并构建名称到路径的映射
+        saved_files_by_name: Dict[str, str] = {}
+        if files:
+            upload_dir = os.path.abspath(os.path.join(os.getcwd(), "uploads"))
+            try:
+                os.makedirs(upload_dir, exist_ok=True)
+            except Exception as mk_e:
+                logging.warning("创建上传目录失败: %s", mk_e)
+            for f in files:
+                try:
+                    original_name = os.path.basename(getattr(f, "filename", "") or "upload.bin")
+                    unique_name = f"{uuid.uuid4().hex}_{original_name}"
+                    save_path = os.path.join(upload_dir, unique_name)
+                    content = await f.read()
+                    with open(save_path, "wb") as out:
+                        out.write(content)
+                    saved_files_by_name[original_name] = save_path
+                    logging.debug("保存上传文件: original=%s path=%s size=%s", original_name, save_path, len(content))
+                except Exception as fe:
+                    logging.warning("保存上传文件失败: %s (%s)", getattr(f, "filename", "(unknown)"), fe)
 
         # 构建输入参数（仅接受映射类型，避免将字符串作为 **kwargs 传入）
         inputs: Dict[str, Any] = {}
@@ -117,18 +141,19 @@ async def execute_workflow_with_form(
                 logging.debug("跳过空值节点: node_id=%s", node_id)
                 continue
 
-            value = raw_value
-
-            # 若 value 不是映射，尝试根据 class_type 做最小化推断；否则跳过
-            if not isinstance(value, dict):
+            # 规范化为映射类型，避免类型推断造成的 __setitem__ 报错
+            value_map: Dict[str, Any]
+            if isinstance(raw_value, dict):
+                value_map = dict(raw_value)
+            else:
                 # 文本类输入（支持 CLIPTextEncode 及其变体）
                 if class_type == "Text" or (isinstance(class_type, str) and "CLIPTextEncode" in class_type):
-                    value = {"text": value}
+                    value_map = {"text": raw_value}
                 elif class_type == "LoadImageOutput":
-                    value = {"image": value}
+                    value_map = {"image_path": raw_value}
                 elif class_type == "Switch any [Crystools]":
-                    if isinstance(value, bool):
-                        value = {"boolean": value}
+                    if isinstance(raw_value, bool):
+                        value_map = {"boolean": raw_value}
                     else:
                         logging.debug("无法从非布尔值推断 Switch any 的映射, 跳过 node_id=%s", node_id)
                         continue
@@ -136,8 +161,18 @@ async def execute_workflow_with_form(
                     logging.debug("未知 class_type 且 value 非映射，跳过 node_id=%s", node_id)
                     continue
 
-            inputs[str(node_id)] = value
-            logging.debug("设置输入参数: node_id=%s value_type=%s value=%s", node_id, type(value).__name__, value)
+            # 若为图片类型且提供的值是文件名，则映射成保存后的服务器路径
+            if class_type == "LoadImageOutput":
+                try:
+                    img_ref = value_map.get("image_path")
+                    if isinstance(img_ref, str) and img_ref in saved_files_by_name:
+                        value_map["image_path"] = saved_files_by_name[img_ref]
+                        logging.debug("映射图片文件名到路径: %s -> %s", img_ref, value_map["image_path"])
+                except Exception as map_e:
+                    logging.debug("图片文件名映射失败 node_id=%s: %s", node_id, map_e)
+
+            inputs[str(node_id)] = value_map
+            logging.debug("设置输入参数: node_id=%s value_type=%s value=%s", node_id, type(value_map).__name__, value_map)
 
         # 获取工作流执行器
         logging.debug("获取工作流执行器")
@@ -148,7 +183,7 @@ async def execute_workflow_with_form(
         # 在线程池中执行阻塞型工作，防止阻塞事件循环造成后端“卡住”
         result = await run_in_threadpool(executor.execute_workflow, workflow_data, inputs)
         logging.info(f"工作流 '{workflow_id}' 执行完成，执行ID: {result['execution_id']}，状态: {result['status']}")
- 
+
         return WorkflowExecutionResponse(
             execution_id=result["execution_id"],
             status=result["status"],

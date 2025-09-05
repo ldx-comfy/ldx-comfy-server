@@ -21,6 +21,18 @@ class ComfyUIWorkflowExecutor(WorkflowExecutorPlugin):
         self.client_id = str(uuid.uuid4())
         self.output_dir = "comfy_out_image"
         self._active_executions: Dict[str, Dict[str, Any]] = {}
+        # 超时配置：支持通过环境变量关闭（设置为 0 / "none" / "" 表示无限等待）
+        def _parse_timeout(env_key: str, default: int):
+            val = os.environ.get(env_key, str(default))
+            try:
+                sval = str(val).strip().lower()
+                if sval in ("0", "none", "null", ""):
+                    return None  # None 代表不设置超时（阻塞等待）
+                return float(val)
+            except Exception:
+                return float(default)
+        self.ws_timeout = _parse_timeout("COMFY_WS_TIMEOUT", 600)
+        self.http_timeout = _parse_timeout("COMFY_HTTP_TIMEOUT", 600)
 
     @property
     def metadata(self) -> PluginMetadata:
@@ -37,6 +49,21 @@ class ComfyUIWorkflowExecutor(WorkflowExecutorPlugin):
         self.server_address = config.get('server_address', self.server_address)
         self.output_dir = config.get('output_dir', self.output_dir)
         os.makedirs(self.output_dir, exist_ok=True)
+
+        # 支持通过配置覆盖超时，值为 0/None/"none" 表示不设置超时（无限等待）
+        def _coerce_timeout(val, current):
+            try:
+                if val is None:
+                    return None
+                sval = str(val).strip().lower()
+                if sval in ("0", "none", "null", ""):
+                    return None
+                return float(val)
+            except Exception:
+                return current
+
+        self.ws_timeout = _coerce_timeout(config.get('ws_timeout', self.ws_timeout), self.ws_timeout)
+        self.http_timeout = _coerce_timeout(config.get('http_timeout', self.http_timeout), self.http_timeout)
 
     def cleanup(self) -> None:
         """清理资源"""
@@ -174,14 +201,17 @@ class ComfyUIWorkflowExecutor(WorkflowExecutorPlugin):
         # 队列工作流
         prompt_id = self._queue_prompt(workflow_data)['prompt_id']
 
-        # 创建WebSocket连接（增加超时，避免卡死）
+        # 创建WebSocket连接（支持无限超时）
         ws = websocket.WebSocket()
         try:
-            ws.settimeout(60)
+            ws.settimeout(self.ws_timeout if self.ws_timeout is not None else None)
         except Exception:
             pass
-        ws.connect(f"ws://{self.server_address}/ws?clientId={self.client_id}", timeout=60)
- 
+        if self.ws_timeout is not None:
+            ws.connect(f"ws://{self.server_address}/ws?clientId={self.client_id}", timeout=self.ws_timeout)
+        else:
+            ws.connect(f"ws://{self.server_address}/ws?clientId={self.client_id}")
+
         output_images = []
 
         try:
@@ -214,7 +244,11 @@ class ComfyUIWorkflowExecutor(WorkflowExecutorPlugin):
         p = {"prompt": prompt, "client_id": self.client_id}
         data = json.dumps(p).encode('utf-8')
         req = urllib.request.Request(f"http://{self.server_address}/prompt", data=data)
-        return json.loads(urllib.request.urlopen(req, timeout=60).read())
+        if self.http_timeout is not None:
+            resp = urllib.request.urlopen(req, timeout=self.http_timeout)
+        else:
+            resp = urllib.request.urlopen(req)
+        return json.loads(resp.read())
 
     def _get_image(self, filename: str, subfolder: str, folder_type: str) -> str:
         """下载图像"""
@@ -223,15 +257,33 @@ class ComfyUIWorkflowExecutor(WorkflowExecutorPlugin):
 
         data = {"filename": filename, "subfolder": subfolder, "type": folder_type}
         url_values = urllib.parse.urlencode(data)
-        with urllib.request.urlopen(f"http://{self.server_address}/view?{url_values}", timeout=120) as response:
+        if self.http_timeout is not None:
+            response = urllib.request.urlopen(f"http://{self.server_address}/view?{url_values}", timeout=self.http_timeout)
+        else:
+            response = urllib.request.urlopen(f"http://{self.server_address}/view?{url_values}")
+        try:
             with open(filepath, 'wb') as f:
                 f.write(response.read())
+        finally:
+            try:
+                response.close()
+            except Exception:
+                pass
         return filepath
 
     def _get_history(self, prompt_id: str) -> Dict[str, Any]:
         """获取执行历史"""
-        with urllib.request.urlopen(f"http://{self.server_address}/history/{prompt_id}", timeout=60) as response:
+        if self.http_timeout is not None:
+            response = urllib.request.urlopen(f"http://{self.server_address}/history/{prompt_id}", timeout=self.http_timeout)
+        else:
+            response = urllib.request.urlopen(f"http://{self.server_address}/history/{prompt_id}")
+        try:
             return json.loads(response.read())
+        finally:
+            try:
+                response.close()
+            except Exception:
+                pass
 
 
 # 导出执行器

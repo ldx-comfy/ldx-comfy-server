@@ -50,9 +50,12 @@ async def lifespan(app: FastAPI):
     plugin_manager.discover_and_register_plugins()
 
     # 初始化插件配置
+    # 取消超时（ws_timeout/http_timeout 设为 0 或 None 表示无限等待）
     config = {
         'server_address': '1.15.138.41:6889',
-        'output_dir': 'comfy_out_image'
+        'output_dir': 'comfy_out_image',
+        'ws_timeout': 0,
+        'http_timeout': 0,
     }
     plugin_manager.initialize_plugins(config)
     logger.info("插件系统初始化完成")
