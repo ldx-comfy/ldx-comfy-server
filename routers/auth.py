@@ -217,3 +217,15 @@ async def admin_ping(identity: Dict[str, Any] = Depends(require_roles(["admin"])
     管理员测试端点：需要 admin 角色
     """
     return {"ok": True, "sub": identity.get("sub")}
+
+@router.get("/debug/config")
+async def debug_config():
+    """
+    调试端点：返回当前的认证配置
+    """
+    return {
+        "users": auth_config.get_users(),
+        "codes": auth_config.get_codes(),
+        "jwt_secret": auth_config.get_jwt_secret(),
+        "jwt_expires_seconds": auth_config.get_jwt_expires_seconds()
+    }

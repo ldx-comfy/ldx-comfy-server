@@ -231,7 +231,9 @@ def _maybe_persist_admin_to_json(cfg_path: str, admin_user: Dict[str, Any]) -> N
 
 def _init_config() -> None:
     path = _effective_config_path()
+    logger.info("Attempting to load auth config from: %s", path)
     data = _load_json_file(path)
+    logger.info("Auth config loaded from %s: %s", path, data)
     if data is None:
         logger.warning("Using default auth config: empty users/codes, default JWT settings")
         data = {}
@@ -248,6 +250,7 @@ def _init_config() -> None:
     codes = data.get("codes")
     _CONFIG["users"] = users if isinstance(users, list) else []
     _CONFIG["codes"] = codes if isinstance(codes, list) else []
+    logger.info("Effective users list: %s", _CONFIG.get("users", []))
 
     if not isinstance(_CONFIG["users"], list):
         _CONFIG["users"] = []
