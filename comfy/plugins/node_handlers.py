@@ -41,10 +41,12 @@ class ImageInputHandler(NodeHandlerPlugin):
 
     def handle_node(self, node_id: str, node_info: Dict[str, Any], **kwargs) -> Dict[str, Any]:
         """处理图像输入节点"""
+        logger.debug(f"开始处理图像输入节点: node_id={node_id}, node_info={node_info}, kwargs={kwargs}")
         title = node_info['_meta']['title']
         image_path = kwargs.get('image_path')
 
         if not image_path:
+            logger.warning(f"节点 '{title}' 缺少 image_path 参数")
             raise ValueError(f"节点 '{title}' 需要提供 image_path 参数")
 
         logger.info(f"正在上传图片到服务器: {image_path}")
@@ -58,14 +60,16 @@ class ImageInputHandler(NodeHandlerPlugin):
                 result = response.json()
                 server_path = f"{result['name']} [input]"
                 logger.info(f"图片已上传到服务器: {server_path}")
+                logger.debug(f"上传成功响应: {result}")
                 return {'image': server_path}
             else:
                 logger.error(f"上传失败: {response.status_code} - {response.text}")
+                logger.debug(f"上传失败响应: {response.text}")
                 return {'image': image_path}
         except Exception as e:
             logger.error(f"上传出错: {str(e)}")
+            logger.debug(f"上传异常详情: {e}", exc_info=True)
             return {'image': image_path}
-
     def get_required_inputs(self) -> List[str]:
         """获取所需输入参数"""
         return ['image_path']

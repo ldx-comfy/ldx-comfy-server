@@ -1,6 +1,8 @@
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
 from routers import include_routers
 from comfy.plugins import plugin_manager
 from comfy.logging_config import get_colorful_logger
@@ -12,6 +14,7 @@ import time
 
 # 配置彩色日志
 logger = get_colorful_logger(__name__)
+print("Starting application...")
 
 
 async def check_comfyui_connectivity_on_startup(server_address: str):
@@ -73,13 +76,35 @@ async def lifespan(app: FastAPI):
 # 创建FastAPI应用
 app = include_routers(FastAPI(lifespan=lifespan))
 
+# 中间件：记录请求和响应信息
+async def log_requests(request: Request, call_next):
+    # 记录请求开始时间
+    start_time = time.time()
+    
+    # 记录请求信息
+    logger.info(f"Request: {request.method} {request.url}")
+    
+    # 调用下一个中间件或路由处理函数
+    response = await call_next(request)
+    
+    # 计算处理时间
+    process_time = time.time() - start_time
+    
+    # 记录响应信息
+    logger.info(f"Response: {response.status_code} (处理时间: {process_time:.2f}s)")
+    
+    return response
+
+# 注册中间件
+app.add_middleware(BaseHTTPMiddleware, dispatch=log_requests)
+
 # CORS 配置：允许前端开发服务器跨域访问（Astro dev: http://localhost:4321）
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:4321",
         "http://127.0.0.1:4321",
-        "http://localhost:3000",
+        "http://localhost:300",
         "http://127.0.0.1:3000",
         "http://localhost",
         "http://127.0.0.1",

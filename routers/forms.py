@@ -101,6 +101,7 @@ async def execute_workflow_with_form(
         # 处理上传的文件，将其保存到服务器并构建名称到路径的映射
         saved_files_by_name: Dict[str, str] = {}
         if files:
+            logging.info(f"接收到 {len(files)} 个上传文件")
             upload_dir = os.path.abspath(os.path.join(os.getcwd(), "uploads"))
             try:
                 os.makedirs(upload_dir, exist_ok=True)
@@ -109,6 +110,7 @@ async def execute_workflow_with_form(
             for f in files:
                 try:
                     original_name = os.path.basename(getattr(f, "filename", "") or "upload.bin")
+                    logging.debug(f"处理上传文件: original_name={original_name}, content_type={getattr(f, 'content_type', 'unknown')}")
                     unique_name = f"{uuid.uuid4().hex}_{original_name}"
                     save_path = os.path.join(upload_dir, unique_name)
                     content = await f.read()
@@ -180,8 +182,10 @@ async def execute_workflow_with_form(
 
         # 执行工作流（节点内容交由插件处理）
         logging.info(f"开始执行工作流 '{workflow_id}'，输入参数数量: {len(inputs)}")
+        logging.debug("准备在线程池中执行工作流")
         # 在线程池中执行阻塞型工作，防止阻塞事件循环造成后端“卡住”
         result = await run_in_threadpool(executor.execute_workflow, workflow_data, inputs)
+        logging.debug("工作流执行完成")
         logging.info(f"工作流 '{workflow_id}' 执行完成，执行ID: {result['execution_id']}，状态: {result['status']}")
 
         return WorkflowExecutionResponse(

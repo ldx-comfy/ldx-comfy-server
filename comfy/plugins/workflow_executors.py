@@ -198,8 +198,12 @@ class ComfyUIWorkflowExecutor(WorkflowExecutorPlugin):
 
     def _execute_on_comfyui(self, workflow_data: Dict[str, Any]) -> List[str]:
         """在ComfyUI上执行工作流"""
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info("开始在ComfyUI上执行工作流")
         # 队列工作流
         prompt_id = self._queue_prompt(workflow_data)['prompt_id']
+        logger.info(f"工作流已加入队列，prompt_id: {prompt_id}")
 
         # 创建WebSocket连接（支持无限超时）
         ws = websocket.WebSocket()
@@ -216,23 +220,35 @@ class ComfyUIWorkflowExecutor(WorkflowExecutorPlugin):
 
         try:
             # 等待执行完成
+            logger.info("开始等待工作流执行完成")
             while True:
+                logger.debug("等待WebSocket消息")
                 out = ws.recv()
+                logger.debug(f"收到WebSocket消息: {out[:100]}...")  # 只显示前100个字符
                 if isinstance(out, str):
                     message = json.loads(out)
+                    logger.debug(f"解析消息类型: {message.get('type')}")
                     if message['type'] == 'executing':
                         data = message['data']
+                        logger.debug(f"执行消息数据: {data}")
                         if data['node'] is None and data['prompt_id'] == prompt_id:
+                            logger.info("工作流执行完成")
                             break  # 执行完成
 
             # 获取结果
+            logger.info("开始获取执行结果")
             history = self._get_history(prompt_id)[prompt_id]
+            logger.debug(f"获取到的历史记录: {list(history.keys())}")
             for node_id in history['outputs']:
                 node_output = history['outputs'][node_id]
+                logger.debug(f"处理节点 {node_id} 的输出")
                 if 'images' in node_output:
+                    logger.debug(f"节点 {node_id} 包含图片输出")
                     for image in node_output['images']:
+                        logger.debug(f"处理图片: {image}")
                         filepath = self._get_image(image['filename'], image['subfolder'], image['type'])
                         output_images.append(filepath)
+            logger.info(f"获取到 {len(output_images)} 张图片")
 
         finally:
             ws.close()
