@@ -96,6 +96,30 @@ async def get_user_generation_history(user_id: str) -> List[Dict[str, Any]]:
         logger.error(f"獲取用戶生成歷史記錄失敗: {e}")
         return []
 
+def get_all_generation_history() -> List[Dict[str, Any]]:
+    """
+    獲取所有用戶的生成歷史記錄。
+
+    Returns:
+        所有用戶的生成歷史記錄列表。
+    """
+    try:
+        _ensure_history_file_exists()
+        
+        # 讀取歷史記錄
+        with open(HISTORY_FILE, 'r', encoding='utf-8') as f:
+            history = json.load(f)
+        
+        # 按時間戳降序排列（最新的在前）
+        history.sort(key=lambda x: x.get("timestamp", 0), reverse=True)
+        
+        return history
+        
+    except Exception as e:
+        logger.error(f"獲取所有用戶生成歷史記錄失敗: {e}")
+        return []
+
+
 def process_image_paths(history_records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
     處理歷史記錄中的圖片路徑，確保它們不包含重複的前綴。

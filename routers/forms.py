@@ -12,8 +12,8 @@ from comfy.plugins import plugin_manager
 from comfy.get_wfs import get_wf_list, get_wf_params, get_wf
 from starlette.concurrency import run_in_threadpool
 import config
-from routers.auth import get_current_identity
-from history import save_generation_history, get_user_generation_history, process_image_paths
+from routers.auth import get_current_identity, require_roles
+from history import save_generation_history, get_user_generation_history, get_all_generation_history, process_image_paths
 
 
 router = APIRouter(prefix="/api/v1/forms", tags=["表单工作流"])
@@ -282,6 +282,53 @@ async def get_user_generation_history_detail(execution_id: str, identity: Dict[s
     except Exception as e:
         logging.error(f"获取执行ID '{execution_id}' 的生成历史记录详情失败: {str(e)}")
         raise HTTPException(status_code=500, detail=f"获取生成历史记录详情失败: {str(e)}")
+
+
+@router.get("/admin/history", response_model=List[Dict[str, Any]])
+async def get_all_users_generation_history(identity: Dict[str, Any] = Depends(require_roles(["admin"]))):
+    """获取所有用户的生成历史记录（仅限管理员）"""
+    logging.info("管理员开始获取所有用户的生成历史记录")
+    try:
+        history = get_all_generation_history()
+        # 處理圖片路徑以避免重複前綴
+        processed_history = process_image_paths(history)
+        logging.info(f"管理员成功获取所有用户的生成历史记录，共 {len(processed_history)} 条")
+        return processed_history
+    except Exception as e:
+        logging.error(f"管理员获取所有用户的生成历史记录失败: {str(e)}")
+        raise
+
+
+@router.get("/admin/history/{execution_id}", response_model=Dict[str, Any])
+async def get_any_user_generation_history_detail(execution_id: str, identity: Dict[str, Any] = Depends(require_roles(["admin"]))):
+    """获取任意用户特定执行ID的生成历史记录详情（仅限管理员）"""
+    logging.info(f"管理员开始获取执行ID '{execution_id}' 的生成历史记录详情")
+    try:
+        from history import get_all_generation_history
+        history = get_all_generation_history()
+        # 處理圖片路徑以避免重複前綴
+        processed_history = process_image_paths(history)
+        
+        # 查找匹配的记录
+        record = None
+        for item in processed_history:
+            if item.get("execution_id") == execution_id:
+                record = item
+                break
+        
+        if record is None:
+            logging.warning(f"未找到执行ID '{execution_id}' 的生成历史记录")
+            raise HTTPException(status_code=404, detail=f"未找到执行ID '{execution_id}' 的生成历史记录")
+        
+        logging.info(f"管理员成功获取执行ID '{execution_id}' 的生成历史记录详情")
+        return record
+    except HTTPException:
+        # 重新抛出HTTP异常
+        raise
+    except Exception as e:
+        logging.error(f"管理员获取执行ID '{execution_id}' 的生成历史记录详情失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"获取生成历史记录详情失败: {str(e)}")
+
 
 @router.get("/executions/{execution_id}/status", response_model=WorkflowExecutionResponse)
 async def get_execution_status(execution_id: str):
