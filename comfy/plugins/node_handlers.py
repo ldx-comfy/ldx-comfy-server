@@ -2,7 +2,7 @@
 节点处理器插件实现
 """
 import os
-import requests
+import httpx
 from typing import Dict, Any, List
 from .base import NodeHandlerPlugin, PluginMetadata
 from logging_config import get_colorful_logger
@@ -15,7 +15,7 @@ class ImageInputHandler(NodeHandlerPlugin):
     """图像输入处理器插件"""
 
     def __init__(self):
-        self.server_address = "106.52.220.169:6889"
+        pass
 
     @property
     def metadata(self) -> PluginMetadata:
@@ -29,7 +29,7 @@ class ImageInputHandler(NodeHandlerPlugin):
 
     def initialize(self, config: Dict[str, Any]) -> None:
         """初始化插件"""
-        self.server_address = config.get('server_address', self.server_address)
+        self.server_address = config.get('server_address')
 
     def cleanup(self) -> None:
         """清理资源"""
@@ -54,7 +54,7 @@ class ImageInputHandler(NodeHandlerPlugin):
         try:
             with open(image_path, 'rb') as f:
                 files = {'image': (os.path.basename(image_path), f)}
-                response = requests.post(f"http://{self.server_address}/upload/image", files=files)
+                response = httpx.post(f"http://{self.server_address}/upload/image", files=files)
 
             if response.status_code == 200:
                 result = response.json()
