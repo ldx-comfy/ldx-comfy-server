@@ -6,8 +6,7 @@ import sys
 import websocket
 import uuid
 import json
-import urllib.request
-import urllib.parse
+import httpx
 from typing import Dict, Any, List, Optional
 from .base import WorkflowExecutorPlugin, PluginMetadata
 from ..get_wfs import get_wf
@@ -247,48 +246,33 @@ class ComfyUIWorkflowExecutor(WorkflowExecutorPlugin):
     def _queue_prompt(self, prompt: Dict[str, Any]) -> Dict[str, Any]:
         """将工作流加入队列"""
         p = {"prompt": prompt, "client_id": self.client_id}
-        data = json.dumps(p).encode('utf-8')
-        req = urllib.request.Request(f"http://{self.server_address}/prompt", data=data)
-        if self.http_timeout is not None:
-            resp = urllib.request.urlopen(req, timeout=self.http_timeout)
-        else:
-            resp = urllib.request.urlopen(req)
-        return json.loads(resp.read())
+        data = json.dumps(p)
+        url = f"http://{self.server_address}/prompt"
+        with httpx.Client(timeout=self.http_timeout) as client:
+            resp = client.post(url, content=data, headers={"Content-Type": "application/json"})
+            return resp.json()
 
     def _get_image(self, filename: str, subfolder: str, folder_type: str) -> str:
         """下载图像"""
         os.makedirs(self.output_dir, exist_ok=True)
         filepath = os.path.join(self.output_dir, filename)
 
-        data = {"filename": filename, "subfolder": subfolder, "type": folder_type}
-        url_values = urllib.parse.urlencode(data)
-        if self.http_timeout is not None:
-            response = urllib.request.urlopen(f"http://{self.server_address}/view?{url_values}", timeout=self.http_timeout)
-        else:
-            response = urllib.request.urlopen(f"http://{self.server_address}/view?{url_values}")
-        try:
-            with open(filepath, 'wb') as f:
-                f.write(response.read())
-        finally:
-            try:
-                response.close()
-            except Exception:
-                pass
+        params = {"filename": filename, "subfolder": subfolder, "type": folder_type}
+        url = f"http://{self.server_address}/view"
+        with httpx.Client(timeout=self.http_timeout) as client:
+            with client.stream("GET", url, params=params) as response:
+                response.raise_for_status()
+                with open(filepath, 'wb') as f:
+                    for chunk in response.iter_bytes():
+                        f.write(chunk)
         return filepath
 
     def _get_history(self, prompt_id: str) -> Dict[str, Any]:
         """获取执行历史"""
-        if self.http_timeout is not None:
-            response = urllib.request.urlopen(f"http://{self.server_address}/history/{prompt_id}", timeout=self.http_timeout)
-        else:
-            response = urllib.request.urlopen(f"http://{self.server_address}/history/{prompt_id}")
-        try:
-            return json.loads(response.read())
-        finally:
-            try:
-                response.close()
-            except Exception:
-                pass
+        url = f"http://{self.server_address}/history/{prompt_id}"
+        with httpx.Client(timeout=self.http_timeout) as client:
+            response = client.get(url)
+            return response.json()
 
 
 # 导出执行器

@@ -1,8 +1,7 @@
 """
 健康检查路由
 """
-import urllib.request
-import urllib.error
+import httpx
 import time
 from typing import Dict, Any
 from fastapi import APIRouter
@@ -97,11 +96,9 @@ async def check_comfyui_health() -> ComfyUIStatus:
         # 使用GET /system_stats端点检查ComfyUI连通性
         url = f"http://{server_address}/system_stats"
 
-        req = urllib.request.Request(url, method='GET')
-
-        with urllib.request.urlopen(req, timeout=5) :# as response:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await client.get(url)
             response_time = (time.time() - start_time) * 1000
-            #response_data = json.loads(response.read().decode('utf-8'))
 
             return ComfyUIStatus(
                 status="connected",
@@ -109,20 +106,20 @@ async def check_comfyui_health() -> ComfyUIStatus:
                 error=""
             )
 
-    except urllib.error.HTTPError as e:
+    except httpx.HTTPStatusError as e:
         response_time = (time.time() - start_time) * 1000
         return ComfyUIStatus(
             status="disconnected",
             response_time_ms=round(response_time, 2),
-            error=f"HTTP {e.code}: {e.reason}"
+            error=f"HTTP {e.response.status_code}: {e.response.reason_phrase}"
         )
 
-    except urllib.error.URLError as e:
+    except httpx.RequestError as e:
         response_time = (time.time() - start_time) * 1000
         return ComfyUIStatus(
             status="disconnected",
             response_time_ms=round(response_time, 2),
-            error=f"连接失败: {str(e.reason)}"
+            error=f"连接失败: {str(e)}"
         )
 
     except Exception as e:

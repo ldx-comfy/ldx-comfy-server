@@ -7,8 +7,7 @@ from routers import include_routers
 from comfy.plugins import plugin_manager
 from logging_config import get_colorful_logger
 from contextlib import asynccontextmanager
-import urllib.request
-import urllib.error
+import httpx
 import json
 import time
 import config
@@ -27,20 +26,20 @@ async def check_comfyui_connectivity_on_startup(server_address: str):
     try:
         # 使用GET /system_stats端点检查连通性
         url = f"http://{server_address}/system_stats"
-        req = urllib.request.Request(url, method='GET')
 
         start_time = time.time()
-        with urllib.request.urlopen(req, timeout=10) as response:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(url)
             response_time = (time.time() - start_time) * 1000
-            response_data = json.loads(response.read().decode('utf-8'))
+            response_data = response.json()
 
             logger.info(f"✅ ComfyUI后端连接正常 (响应时间: {response_time:.2f}ms)")
 
-    except urllib.error.HTTPError as e:
-        logger.warning(f"⚠️  ComfyUI后端连接失败: HTTP {e.code} - {e.reason}")
+    except httpx.HTTPStatusError as e:
+        logger.warning(f"⚠️  ComfyUI后端连接失败: HTTP {e.response.status_code} - {e.response.reason_phrase}")
         logger.warning("   请检查ComfyUI服务是否正在运行")
-    except urllib.error.URLError as e:
-        logger.warning(f"⚠️  ComfyUI后端连接失败: {e.reason}")
+    except httpx.RequestError as e:
+        logger.warning(f"⚠️  ComfyUI后端连接失败: {str(e)}")
         logger.warning("   请检查网络连接和ComfyUI服务状态")
     except Exception as e:
         logger.warning(f"⚠️  ComfyUI后端连接检查出错: {str(e)}")
