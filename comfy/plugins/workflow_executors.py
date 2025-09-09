@@ -50,8 +50,8 @@ class ComfyUIWorkflowExecutor(WorkflowExecutorPlugin):
             except Exception:
                 return current
 
-        self.ws_timeout = config.get('ws_timeout')
-        self.http_timeout = config.get('http_timeout')
+        self.ws_timeout = _coerce_timeout(config.get('ws_timeout'), 30.0)
+        self.http_timeout = _coerce_timeout(config.get('http_timeout'), 30.0)
 
     def cleanup(self) -> None:
         """清理资源"""
@@ -193,16 +193,18 @@ class ComfyUIWorkflowExecutor(WorkflowExecutorPlugin):
         prompt_id = self._queue_prompt(workflow_data)['prompt_id']
         logger.info(f"工作流已加入队列，prompt_id: {prompt_id}")
 
-        # 创建WebSocket连接（支持无限超时）
+        # 创建WebSocket连接
         ws = websocket.WebSocket()
         try:
-            ws.settimeout(self.ws_timeout if self.ws_timeout is not None else None)
-        except Exception:
-            pass
-        if self.ws_timeout is not None:
-            ws.connect(f"ws://{self.server_address}/ws?clientId={self.client_id}", timeout=self.ws_timeout)
-        else:
-            ws.connect(f"ws://{self.server_address}/ws?clientId={self.client_id}")
+            if self.ws_timeout is not None:
+                ws.settimeout(self.ws_timeout)
+                ws.connect(f"ws://{self.server_address}/ws?clientId={self.client_id}", timeout=self.ws_timeout)
+            else:
+                ws.settimeout(None)  # 无限超时
+                ws.connect(f"ws://{self.server_address}/ws?clientId={self.client_id}")
+        except Exception as e:
+            logger.error(f"WebSocket连接失败: {str(e)}")
+            raise
 
         output_images = []
 
@@ -248,30 +250,34 @@ class ComfyUIWorkflowExecutor(WorkflowExecutorPlugin):
         p = {"prompt": prompt, "client_id": self.client_id}
         data = json.dumps(p)
         url = f"http://{self.server_address}/prompt"
-        with httpx.Client(timeout=self.http_timeout) as client:
+        timeout = self.http_timeout if self.http_timeout is not None else 30.0
+        with httpx.Client(timeout=timeout) as client:
             resp = client.post(url, content=data, headers={"Content-Type": "application/json"})
+            resp.raise_for_status()
             return resp.json()
 
     def _get_image(self, filename: str, subfolder: str, folder_type: str) -> str:
         """下载图像"""
-        os.makedirs(self.output_dir, exist_ok=True)
-        filepath = os.path.join(self.output_dir, filename)
+        filepath = os.path.join(config.COMFY_OUTPUT_DIR, filename)
 
         params = {"filename": filename, "subfolder": subfolder, "type": folder_type}
         url = f"http://{self.server_address}/view"
-        with httpx.Client(timeout=self.http_timeout) as client:
+        timeout = self.http_timeout if self.http_timeout is not None else 30.0
+        with httpx.Client(timeout=timeout) as client:
             with client.stream("GET", url, params=params) as response:
                 response.raise_for_status()
                 with open(filepath, 'wb') as f:
                     for chunk in response.iter_bytes():
                         f.write(chunk)
-        return filepath
+        return os.path.join("comfy_out_image", filename)
 
     def _get_history(self, prompt_id: str) -> Dict[str, Any]:
         """获取执行历史"""
         url = f"http://{self.server_address}/history/{prompt_id}"
-        with httpx.Client(timeout=self.http_timeout) as client:
+        timeout = self.http_timeout if self.http_timeout is not None else 30.0
+        with httpx.Client(timeout=timeout) as client:
             response = client.get(url)
+            response.raise_for_status()
             return response.json()
 
 
