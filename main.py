@@ -57,17 +57,17 @@ async def lifespan(app: FastAPI):
 
     # 初始化插件配置
     # 取消超时（ws_timeout/http_timeout 设为 0 或 None 表示无限等待）
-    config = {
+    plugin_config = {
         'server_address': '43.142.161.204:6889',
-        'output_dir': 'comfy_out_image',
+        'output_dir': config.COMFY_OUTPUT_DIR,
         'ws_timeout': 0,
         'http_timeout': 0,
     }
-    plugin_manager.initialize_plugins(config)
+    plugin_manager.initialize_plugins(plugin_config)
     logger.info("插件系统初始化完成")
 
     # 检查ComfyUI后端连通性
-    await check_comfyui_connectivity_on_startup(config['server_address'])
+    await check_comfyui_connectivity_on_startup(plugin_config['server_address'])
 
     yield
 
@@ -113,7 +113,7 @@ app.add_middleware(
 
 # 静态文件: 暴露生成图片目录以供前端直接访问
 # 例如: http://127.0.0.1:1145/comfy_out_image/ComfyUI_00002_.png
-app.mount("/comfy_out_image", StaticFiles(directory="comfy_out_image"), name="comfy_out_image")
+app.mount("/comfy_out_image", StaticFiles(directory=config.COMFY_OUTPUT_DIR), name="comfy_out_image")
 
 if __name__ == "__main__":
     import uvicorn

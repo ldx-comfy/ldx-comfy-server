@@ -11,6 +11,7 @@ import urllib.parse
 from typing import Dict, Any, List, Optional
 from .base import WorkflowExecutorPlugin, PluginMetadata
 from ..get_wfs import get_wf
+import config
 
 
 class ComfyUIWorkflowExecutor(WorkflowExecutorPlugin):
@@ -19,7 +20,7 @@ class ComfyUIWorkflowExecutor(WorkflowExecutorPlugin):
     def __init__(self):
         self.server_address = "106.52.220.169:6889"
         self.client_id = str(uuid.uuid4())
-        self.output_dir = "comfy_out_image"
+        self.output_dir = config.COMFY_OUTPUT_DIR
         self._active_executions: Dict[str, Dict[str, Any]] = {}
 
     @property
