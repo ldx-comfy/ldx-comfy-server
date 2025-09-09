@@ -116,7 +116,8 @@ def process_image_paths(history_records: List[Dict[str, Any]]) -> List[Dict[str,
             images = processed_record['result']['images']
             if isinstance(images, list):
                 for i, image_path in enumerate(images):
-                    if isinstance(image_path, str) and image_path.startswith('comfy_out_image/'):
+                    # 只處理非base64數據URL的文件路徑
+                    if isinstance(image_path, str) and image_path.startswith('comfy_out_image/') and not image_path.startswith('data:'):
                         # 移除重複的前綴
                         images[i] = image_path[len('comfy_out_image/'):]
         
