@@ -11,6 +11,9 @@ import urllib.request
 import urllib.error
 import json
 import time
+import config
+
+config_manager = config.config_manager
 
 # 配置彩色日志
 logger = get_colorful_logger(__name__)
@@ -101,14 +104,7 @@ app.add_middleware(BaseHTTPMiddleware, dispatch=log_requests)
 # CORS 配置：允许前端开发服务器跨域访问（Astro dev: http://localhost:4321）
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:4321",
-        "http://127.0.0.1:4321",
-        "http://localhost:300",
-        "http://127.0.0.1:3000",
-        "http://localhost",
-        "http://127.0.0.1",
-    ],
+    allow_origins=list(config_manager.get("cors", ["*"])), # type: ignore 静态检查无法识别
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -118,7 +114,7 @@ app.add_middleware(
 # 静态文件: 暴露生成图片目录以供前端直接访问
 # 例如: http://127.0.0.1:1145/comfy_out_image/ComfyUI_00002_.png
 app.mount("/comfy_out_image", StaticFiles(directory="comfy_out_image"), name="comfy_out_image")
- 
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=1145,reload=True,workers=1)
