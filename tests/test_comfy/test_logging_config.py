@@ -1,7 +1,7 @@
 import logging
 import pytest
 
-from comfy.logging_config import get_colorful_logger, ColorfulFormatter
+from logging_config import get_colorful_logger, ColorfulFormatter
 
 
 def test_get_colorful_logger_returns_logger():
@@ -23,7 +23,7 @@ def test_get_colorful_logger_fallback_streamhandler_formatting(monkeypatch, caps
     当 rich 不可用时，应使用 StreamHandler + ColorfulFormatter，
     并输出包含分隔符与 ANSI 颜色码的日志。
     """
-    import comfy.logging_config as lc
+    import logging_config as lc
     monkeypatch.setattr(lc, "RICH_AVAILABLE", False, raising=False)
 
     logger = get_colorful_logger("lg-fallback-1")
@@ -44,7 +44,7 @@ def test_logger_level_controls_output(monkeypatch, capsys):
     """
     验证日志级别过滤：当设置为 WARNING 时，INFO 不应输出，WARNING 应输出。
     """
-    import comfy.logging_config as lc
+    import logging_config as lc
     monkeypatch.setattr(lc, "RICH_AVAILABLE", False, raising=False)
 
     logger = get_colorful_logger("lg-level-1")
@@ -68,7 +68,7 @@ def test_rich_branch_used_when_available(monkeypatch):
     当 RICH_AVAILABLE=True 时，使用 RichHandler 路径。
     通过注入 FakeConsole/FakeRichHandler 模拟 rich 存在。
     """
-    import comfy.logging_config as lc
+    import logging_config as lc
 
     class FakeConsole:
         def __init__(self, *args, **kwargs):

@@ -5,7 +5,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from routers import include_routers
 from comfy.plugins import plugin_manager
-from comfy.logging_config import get_colorful_logger
+from logging_config import get_colorful_logger
 from contextlib import asynccontextmanager
 import urllib.request
 import urllib.error
@@ -55,7 +55,7 @@ async def lifespan(app: FastAPI):
     # 初始化插件配置
     # 取消超时（ws_timeout/http_timeout 设为 0 或 None 表示无限等待）
     config = {
-        'server_address': '118.25.149.154:6889',
+        'server_address': '43.142.161.204:6889',
         'output_dir': 'comfy_out_image',
         'ws_timeout': 0,
         'http_timeout': 0,

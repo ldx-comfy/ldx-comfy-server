@@ -5,7 +5,7 @@ import os
 import requests
 from typing import Dict, Any, List
 from .base import NodeHandlerPlugin, PluginMetadata
-from ..logging_config import get_colorful_logger
+from logging_config import get_colorful_logger
 
 # 配置彩色日志
 logger = get_colorful_logger(__name__)

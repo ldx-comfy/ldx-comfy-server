@@ -1,7 +1,7 @@
 import os
 import sys
 import pytest
-from comfy.logging_config import get_colorful_logger
+from logging_config import get_colorful_logger
 
 # 确保项目根目录在 sys.path 中
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))

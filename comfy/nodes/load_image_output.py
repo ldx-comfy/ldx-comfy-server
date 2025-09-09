@@ -1,6 +1,6 @@
 import os
 import requests
-from comfy.logging_config import get_colorful_logger
+from logging_config import get_colorful_logger
 
 # 配置彩色日志
 logger = get_colorful_logger(__name__)

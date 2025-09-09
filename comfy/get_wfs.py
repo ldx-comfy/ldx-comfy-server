@@ -1,7 +1,7 @@
 # 从./wf_files目录下获取所有工作流文件
 import os
 import json
-from comfy.logging_config import get_colorful_logger
+from logging_config import get_colorful_logger
 
 # 配置彩色日志
 logger = get_colorful_logger(__name__)

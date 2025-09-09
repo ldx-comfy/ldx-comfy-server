@@ -12,7 +12,7 @@ import urllib.request
 import urllib.parse
 
 from comfy.get_wfs import get_wf, get_wf_list
-from comfy.logging_config import get_colorful_logger
+from logging_config import get_colorful_logger
 
 # 配置彩色日志
 logger = get_colorful_logger(__name__)
