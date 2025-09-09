@@ -83,14 +83,23 @@ class PluginRegistry:
 
     def register_plugin(self, plugin: Plugin) -> None:
         """注册插件"""
-        self._plugins[plugin.metadata.name] = plugin
+        plugin_name = plugin.metadata.name
+
+        # 检查是否已经注册过相同名称的插件
+        if plugin_name in self._plugins:
+            from logging_config import get_colorful_logger
+            logger = get_colorful_logger(__name__)
+            logger.info(f"插件 '{plugin_name}' 已经注册，跳过重复注册")
+            return
+
+        self._plugins[plugin_name] = plugin
 
         if isinstance(plugin, NodeHandlerPlugin):
             # 注册节点处理器插件
-            self._node_handlers[plugin.metadata.name] = plugin
+            self._node_handlers[plugin_name] = plugin
         elif isinstance(plugin, WorkflowExecutorPlugin):
             # 注册工作流执行器插件
-            self._workflow_executors[plugin.metadata.name] = plugin
+            self._workflow_executors[plugin_name] = plugin
 
     def get_node_handler(self, plugin_name: str) -> Optional[NodeHandlerPlugin]:
         """获取节点处理器插件"""

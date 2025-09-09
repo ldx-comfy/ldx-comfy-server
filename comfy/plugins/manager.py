@@ -58,9 +58,15 @@ class PluginManager:
                 try:
                     # 实例化插件
                     plugin_instance = obj()
-                    # 注册插件
-                    plugin_registry.register_plugin(plugin_instance)
-                    logger.info(f"已注册插件: {plugin_instance.metadata.name} ({plugin_instance.metadata.plugin_type})")
+                    plugin_name = plugin_instance.metadata.name
+
+                    # 检查是否已经注册过相同名称的插件
+                    if plugin_name not in plugin_registry._plugins:
+                        # 注册插件
+                        plugin_registry.register_plugin(plugin_instance)
+                        logger.info(f"已注册插件: {plugin_name} ({plugin_instance.metadata.plugin_type})")
+                    else:
+                        logger.debug(f"插件 '{plugin_name}' 已经注册，跳过")
                 except Exception as e:
                     logger.error(f"注册插件 {name} 时出错: {e}")
 
