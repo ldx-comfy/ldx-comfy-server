@@ -6,12 +6,14 @@ import json
 import logging
 import os
 import uuid
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends
 from pydantic import BaseModel, Field
 from comfy.plugins import plugin_manager
 from comfy.get_wfs import get_wf_list, get_wf_params, get_wf
 from starlette.concurrency import run_in_threadpool
 import config
+from routers.auth import get_current_identity
+from history import save_generation_history, get_user_generation_history, process_image_paths
 
 
 router = APIRouter(prefix="/api/v1/forms", tags=["表单工作流"])
@@ -41,6 +43,19 @@ async def get_available_workflows():
         return workflows
     except Exception as e:
         logging.error(f"获取可用工作流列表失败: {str(e)}")
+        raise
+
+
+@router.get("/user/workflows", response_model=List[str])
+async def get_user_workflows(identity: Dict[str, Any] = Depends(get_current_identity)):
+    """获取当前用户可用的工作流列表"""
+    logging.info("开始获取当前用户可用的工作流列表")
+    try:
+        workflows = get_wf_list()
+        logging.info(f"成功获取 {len(workflows)} 个工作流")
+        return workflows
+    except Exception as e:
+        logging.error(f"获取当前用户可用的工作流列表失败: {str(e)}")
         raise
 
 
@@ -85,7 +100,8 @@ async def get_workflow_form_schema(workflow_id: str):
 async def execute_workflow_with_form(
     workflow_id: str,
     nodes: str = Form(..., description="节点数据，格式: [{node},{node}, ...]"),
-    files: Optional[List[UploadFile]] = File(None)
+    files: Optional[List[UploadFile]] = File(None),
+    identity: Dict[str, Any] = Depends(get_current_identity)
 ):
     """通过表单执行工作流"""
     logging.info(f"开始通过表单执行工作流 '{workflow_id}'")
@@ -189,19 +205,83 @@ async def execute_workflow_with_form(
         logging.debug("工作流执行完成")
         logging.info(f"工作流 '{workflow_id}' 执行完成，执行ID: {result['execution_id']}，状态: {result['status']}")
 
+        # 準備生成歷史數據
+        user_id = identity.get("sub", "unknown_user")
+        input_params = {
+            "nodes": nodes_data,
+            "files": [f.filename for f in files] if files else []
+        }
+        
+        # 保存生成歷史（在返回結果之前）
+        try:
+            save_generation_history(
+                user_id=user_id,
+                workflow_id=workflow_id,
+                execution_id=result["execution_id"],
+                input_params=input_params,
+                result=result
+            )
+            logging.info(f"生成歷史已保存: user_id={user_id}, execution_id={result['execution_id']}")
+        except Exception as e:
+            logging.error(f"保存生成歷史失敗: {e}")
+
         return WorkflowExecutionResponse(
             execution_id=result["execution_id"],
             status=result["status"],
             result=result
         )
-
-    except json.JSONDecodeError as e:
-        logging.error(f"节点数据JSON解析错误: {str(e)}")
-        raise HTTPException(status_code=400, detail="节点数据格式错误，应为JSON格式")
     except Exception as e:
         logging.error(f"执行工作流 '{workflow_id}' 失败: {str(e)}")
         raise HTTPException(status_code=500, detail=f"执行工作流失败: {str(e)}")
 
+
+@router.get("/user/history", response_model=List[Dict[str, Any]])
+async def get_user_generation_history(identity: Dict[str, Any] = Depends(get_current_identity)):
+    """获取当前用户的生成历史记录"""
+    logging.info("开始获取当前用户的生成历史记录")
+    try:
+        user_id = identity.get("sub", "unknown_user")
+        from history import get_user_generation_history as get_user_history
+        history = await get_user_history(user_id)
+        # 處理圖片路徑以避免重複前綴
+        processed_history = process_image_paths(history)
+        logging.info(f"成功获取用户 {user_id} 的生成历史记录，共 {len(processed_history)} 条")
+        return processed_history
+    except Exception as e:
+        logging.error(f"获取当前用户的生成历史记录失败: {str(e)}")
+        raise
+
+
+@router.get("/user/history/{execution_id}", response_model=Dict[str, Any])
+async def get_user_generation_history_detail(execution_id: str, identity: Dict[str, Any] = Depends(get_current_identity)):
+    """获取当前用户特定执行ID的生成历史记录详情"""
+    logging.info(f"开始获取执行ID '{execution_id}' 的生成历史记录详情")
+    try:
+        user_id = identity.get("sub", "unknown_user")
+        from history import get_user_generation_history as get_user_history
+        history = await get_user_history(user_id)
+        # 處理圖片路徑以避免重複前綴
+        processed_history = process_image_paths(history)
+        
+        # 查找匹配的记录
+        record = None
+        for item in processed_history:
+            if item.get("execution_id") == execution_id:
+                record = item
+                break
+        
+        if record is None:
+            logging.warning(f"未找到执行ID '{execution_id}' 的生成历史记录")
+            raise HTTPException(status_code=404, detail=f"未找到执行ID '{execution_id}' 的生成历史记录")
+        
+        logging.info(f"成功获取执行ID '{execution_id}' 的生成历史记录详情")
+        return record
+    except HTTPException:
+        # 重新抛出HTTP异常
+        raise
+    except Exception as e:
+        logging.error(f"获取执行ID '{execution_id}' 的生成历史记录详情失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"获取生成历史记录详情失败: {str(e)}")
 
 @router.get("/executions/{execution_id}/status", response_model=WorkflowExecutionResponse)
 async def get_execution_status(execution_id: str):

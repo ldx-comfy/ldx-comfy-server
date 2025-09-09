@@ -257,19 +257,31 @@ class ComfyUIWorkflowExecutor(WorkflowExecutorPlugin):
             return resp.json()
 
     def _get_image(self, filename: str, subfolder: str, folder_type: str) -> str:
-        """下载图像"""
-        filepath = os.path.join(config.COMFY_OUTPUT_DIR, filename)
-
+        """下载图像并返回base64编码的数据URL，同时保存图像文件"""
+        import base64
+        
+        # 从ComfyUI服务器获取图像数据
         params = {"filename": filename, "subfolder": subfolder, "type": folder_type}
         url = f"http://{self.server_address}/view"
         timeout = self.http_timeout if self.http_timeout is not None else 30.0
         with httpx.Client(timeout=timeout) as client:
-            with client.stream("GET", url, params=params) as response:
-                response.raise_for_status()
-                with open(filepath, 'wb') as f:
-                    for chunk in response.iter_bytes():
-                        f.write(chunk)
-        return os.path.join("comfy_out_image", filename)
+            response = client.get(url, params=params)
+            response.raise_for_status()
+            image_data = response.content
+            
+        # 保存图像文件
+        filepath = os.path.join(config.COMFY_OUTPUT_DIR, filename)
+        with open(filepath, 'wb') as f:
+            f.write(image_data)
+            
+        # 将图像数据转换为base64编码
+        encoded_image = base64.b64encode(image_data).decode('utf-8')
+        
+        # 根据内容类型确定数据URL前缀
+        content_type = response.headers.get('content-type', 'image/png')
+        data_url = f"data:{content_type};base64,{encoded_image}"
+        
+        return data_url
 
     def _get_history(self, prompt_id: str) -> Dict[str, Any]:
         """获取执行历史"""
