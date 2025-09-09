@@ -11,7 +11,8 @@ from typing import Dict, Any, List, Optional
 from .base import WorkflowExecutorPlugin, PluginMetadata
 from ..get_wfs import get_wf
 import config
-
+import logging
+from .node_handlers import ImageInputHandler, TextInputHandler, SwitchInputHandler
 
 class ComfyUIWorkflowExecutor(WorkflowExecutorPlugin):
     """ComfyUI工作流执行器插件"""
@@ -121,7 +122,7 @@ class ComfyUIWorkflowExecutor(WorkflowExecutorPlugin):
 
     def _process_inputs(self, workflow_data: Dict[str, Any], inputs: Dict[str, Any]) -> Dict[str, Any]:
         """处理工作流输入"""
-        from .node_handlers import ImageInputHandler, TextInputHandler, SwitchInputHandler
+        
 
         # 创建处理器实例
         image_handler = ImageInputHandler()
@@ -186,7 +187,6 @@ class ComfyUIWorkflowExecutor(WorkflowExecutorPlugin):
 
     def _execute_on_comfyui(self, workflow_data: Dict[str, Any]) -> List[str]:
         """在ComfyUI上执行工作流"""
-        import logging
         logger = logging.getLogger(__name__)
         logger.info("开始在ComfyUI上执行工作流")
         # 队列工作流

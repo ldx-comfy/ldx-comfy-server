@@ -7,7 +7,8 @@ from typing import Dict, Any
 from fastapi import APIRouter
 from pydantic import BaseModel
 from datetime import datetime
-
+from comfy.plugins import plugin_manager
+from comfy.plugins.workflow_executors import ComfyUIWorkflowExecutor
 router = APIRouter(prefix="/api/v1/health", tags=["健康检查"])
 
 
@@ -76,8 +77,7 @@ async def check_comfyui_health() -> ComfyUIStatus:
     """检查ComfyUI后端健康状态"""
     # 从插件管理器获取服务器地址
     try:
-        from comfy.plugins import plugin_manager
-        from comfy.plugins.workflow_executors import ComfyUIWorkflowExecutor
+
 
         executor = plugin_manager.get_workflow_executor()
         # 类型检查：确保是ComfyUIWorkflowExecutor实例
