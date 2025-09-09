@@ -21,18 +21,6 @@ class ComfyUIWorkflowExecutor(WorkflowExecutorPlugin):
         self.client_id = str(uuid.uuid4())
         self.output_dir = "comfy_out_image"
         self._active_executions: Dict[str, Dict[str, Any]] = {}
-        # 超时配置：支持通过环境变量关闭（设置为 0 / "none" / "" 表示无限等待）
-        def _parse_timeout(env_key: str, default: int):
-            val = os.environ.get(env_key, str(default))
-            try:
-                sval = str(val).strip().lower()
-                if sval in ("0", "none", "null", ""):
-                    return None  # None 代表不设置超时（阻塞等待）
-                return float(val)
-            except Exception:
-                return float(default)
-        self.ws_timeout = _parse_timeout("COMFY_WS_TIMEOUT", 600)
-        self.http_timeout = _parse_timeout("COMFY_HTTP_TIMEOUT", 600)
 
     @property
     def metadata(self) -> PluginMetadata:
@@ -62,8 +50,8 @@ class ComfyUIWorkflowExecutor(WorkflowExecutorPlugin):
             except Exception:
                 return current
 
-        self.ws_timeout = _coerce_timeout(config.get('ws_timeout', self.ws_timeout), self.ws_timeout)
-        self.http_timeout = _coerce_timeout(config.get('http_timeout', self.http_timeout), self.http_timeout)
+        self.ws_timeout = config.get('ws_timeout')
+        self.http_timeout = config.get('http_timeout')
 
     def cleanup(self) -> None:
         """清理资源"""
