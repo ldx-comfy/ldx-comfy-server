@@ -161,21 +161,23 @@ def require_groups(required: List[str], match: str = "any"):
 @router.post("/login", response_model=TokenResponse)
 async def password_login(body: LoginRequest) -> TokenResponse:
     """
-    用户名+密码登录（明文对比自 JSON）
-    注意：若用户仅提供 password_hash 而无明文 password，本实现不做 bcrypt 校验，会登录失败（预留升级位）。
+    用户名+密码登录（SHA256哈希验证）
+    支持 password_hash 字段的哈希密码验证
     """
     user = auth_config.find_user(body.username)
     if not user or not isinstance(user, dict):
         raise _unauthorized("Invalid credentials")
 
-    # 优先明文密码字段（来源 JSON）
-    stored_password = user.get("password")
-    if stored_password is None:
-        # 有 password_hash 但无 password 的情况，当前版本不做 bcrypt 校验
-        raise _unauthorized("Invalid credentials")
-
-    if stored_password != body.password:
-        raise _unauthorized("Invalid credentials")
+    # 优先检查哈希密码字段
+    stored_hash = user.get("password_hash")
+    if stored_hash:
+        if not auth_config.verify_password(body.password, stored_hash):
+            raise _unauthorized("Invalid credentials")
+    else:
+        # 向后兼容：检查明文密码字段
+        stored_password = user.get("password")
+        if stored_password is None or stored_password != body.password:
+            raise _unauthorized("Invalid credentials")
 
     roles, groups = auth_config.resolve_effective_roles(user)
     return _issue_token(subject=body.username, login_mode="password", roles=roles, groups=groups)

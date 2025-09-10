@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 from comfy.plugins import plugin_manager
 from comfy.get_wfs import get_wf_list, get_wf_params, get_wf, _wf_files_dir
 from starlette.concurrency import run_in_threadpool
-import config
+import global_data
 from routers.auth import get_current_identity, require_roles
 from history import save_generation_history, get_user_generation_history, get_all_generation_history, process_image_paths
 
@@ -119,7 +119,7 @@ async def execute_workflow_with_form(
         saved_files_by_name: Dict[str, str] = {}
         if files:
             logging.info(f"接收到 {len(files)} 个上传文件")
-            upload_dir = os.path.abspath(config.UPLOAD_DIR)
+            upload_dir = os.path.abspath(global_data.UPLOAD_DIR)
             try:
                 os.makedirs(upload_dir, exist_ok=True)
             except Exception as mk_e:

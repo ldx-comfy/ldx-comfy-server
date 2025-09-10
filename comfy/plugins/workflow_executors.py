@@ -10,7 +10,7 @@ import httpx
 from typing import Dict, Any, List, Optional
 from .base import WorkflowExecutorPlugin, PluginMetadata
 from ..get_wfs import get_wf
-import config
+import global_data
 import logging
 from .node_handlers import ImageInputHandler, TextInputHandler, SwitchInputHandler
 
@@ -20,7 +20,7 @@ class ComfyUIWorkflowExecutor(WorkflowExecutorPlugin):
     def __init__(self):
         self.server_address = "106.52.220.169:6889"
         self.client_id = str(uuid.uuid4())
-        self.output_dir = config.COMFY_OUTPUT_DIR
+        self.output_dir = global_data.COMFY_OUTPUT_DIR
         self._active_executions: Dict[str, Dict[str, Any]] = {}
 
     @property
@@ -270,7 +270,7 @@ class ComfyUIWorkflowExecutor(WorkflowExecutorPlugin):
             image_data = response.content
             
         # 保存图像文件
-        filepath = os.path.join(config.COMFY_OUTPUT_DIR, filename)
+        filepath = os.path.join(global_data.COMFY_OUTPUT_DIR, filename)
         with open(filepath, 'wb') as f:
             f.write(image_data)
             

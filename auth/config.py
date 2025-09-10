@@ -20,9 +20,10 @@ import time as _time
 import secrets
 import string
 import shutil
+import hashlib
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
-
+import global_data
 logger = logging.getLogger(__name__)
 
 _DEFAULT_SECRET = "change-me"
@@ -46,7 +47,7 @@ _CONFIG: Dict[str, Any] = {
 
 def _effective_config_path() -> str:
     """Return the effective config path from env or default 'auth.json'."""
-    return os.environ.get(_ENV_CONFIG_PATH, "auth.json")
+    return str(global_data.DATA_BASE_PATH / "auth.json")
 
 
 def _load_json_file(path: str) -> Optional[Dict[str, Any]]:
@@ -73,6 +74,27 @@ def generate_random_password(length: int = 16) -> str:
     """
     alphabet = string.ascii_letters + string.digits
     return "".join(secrets.choice(alphabet) for _ in range(max(1, int(length))))
+
+
+def hash_password(password: str) -> str:
+    """
+    Hash a password using SHA256 with salt.
+    Returns the hex digest of the hash.
+    """
+    if not password:
+        return ""
+    # Add a simple salt (in production, use a proper salt)
+    salted_password = password + "comfyui_auth_salt"
+    return hashlib.sha256(salted_password.encode('utf-8')).hexdigest()
+
+
+def verify_password(password: str, hashed_password: str) -> bool:
+    """
+    Verify a password against its hash.
+    """
+    if not password or not hashed_password:
+        return False
+    return hash_password(password) == hashed_password
 
 
 def _expand_groups_to_roles(groups: List[str]) -> List[str]:
@@ -235,8 +257,61 @@ def _init_config() -> None:
     data = _load_json_file(path)
     logger.info("Auth config loaded from %s: %s", path, data)
     if data is None:
-        logger.warning("Using default auth config: empty users/codes, default JWT settings")
-        data = {}
+        logger.warning("Auth config not found, creating default auth.json file")
+        # Create default configuration
+        default_config = {
+            "jwt_secret": "your-jwt-secret-here-change-in-production",
+            "jwt_expires_seconds": 3600,
+            "users": [
+                {
+                    "username": "admin",
+                    "password_hash": hash_password("admin123"),
+                    "roles": ["admin"],
+                    "email": "admin@example.com",
+                    "status": "active",
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                    "last_login": datetime.now(timezone.utc).isoformat(),
+                    "generation_count": 0
+                },
+                {
+                    "username": "user1",
+                    "password_hash": hash_password("user123"),
+                    "roles": ["user"],
+                    "email": "user1@example.com",
+                    "status": "active",
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                    "last_login": datetime.now(timezone.utc).isoformat(),
+                    "generation_count": 0
+                }
+            ],
+            "codes": [
+                {
+                    "code": "TEMP123",
+                    "expires_at": "2025-12-31T23:59:59Z",
+                    "roles": ["user"],
+                    "description": "临时访问码"
+                }
+            ],
+            "groups_map": {
+                "admin": ["admin", "user"],
+                "moderator": ["moderator", "user"],
+                "user": ["user"]
+            },
+            "default_user_groups": ["user"]
+        }
+
+        # Write default config to file
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(default_config, f, ensure_ascii=False, indent=2)
+                f.write("\n")
+            logger.info("Created default auth.json file at %s", path)
+            data = default_config
+        except Exception as e:
+            logger.error("Failed to create default auth.json file: %s", e)
+            logger.warning("Using default auth config: empty users/codes, default JWT settings")
+            data = {}
 
     # Merge with defaults
     try:
@@ -271,7 +346,7 @@ def _init_config() -> None:
     has_admin = any(isinstance(u, dict) and u.get("username") == "admin" for u in _CONFIG["users"])
     if not has_admin:
         admin_pw = generate_random_password(16)
-        admin_user: Dict[str, Any] = {"username": "admin", "password": admin_pw}
+        admin_user: Dict[str, Any] = {"username": "admin", "password_hash": hash_password(admin_pw)}
         # Prefer groups=["admin"] if groups_map.admin exists; otherwise roles=["admin"]
         if isinstance(_CONFIG.get("groups_map"), dict) and "admin" in _CONFIG["groups_map"]:
             admin_user["groups"] = ["admin"]
