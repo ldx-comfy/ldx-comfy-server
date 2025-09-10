@@ -9,7 +9,7 @@ import uuid
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends
 from pydantic import BaseModel, Field
 from comfy.plugins import plugin_manager
-from comfy.get_wfs import get_wf_list, get_wf_params, get_wf
+from comfy.get_wfs import get_wf_list, get_wf_params, get_wf, _wf_files_dir
 from starlette.concurrency import run_in_threadpool
 import config
 from routers.auth import get_current_identity, require_roles
@@ -390,3 +390,66 @@ def _get_field_type(class_type: str) -> str:
     field_type = type_mapping.get(class_type, "text")
     logging.debug(f"映射结果: {class_type} -> {field_type}")
     return field_type
+
+
+@router.post("/workflows/upload")
+async def upload_workflow(
+    file: UploadFile = File(...),
+    identity: Dict[str, Any] = Depends(require_roles(["admin"]))
+):
+    """上传工作流文件"""
+    logging.info(f"开始上传工作流文件: {file.filename}")
+    try:
+        # 检查文件扩展名
+        if not file.filename or not file.filename.endswith('.json'):
+            raise HTTPException(status_code=400, detail="只允许上传 JSON 文件")
+        
+        # 读取文件内容
+        content = await file.read()
+        
+        # 验证 JSON 格式
+        try:
+            workflow_data = json.loads(content)
+        except json.JSONDecodeError as e:
+            raise HTTPException(status_code=400, detail=f"无效的 JSON 格式: {str(e)}")
+        
+        # 获取工作流 ID（文件名不带扩展名）
+        workflow_id = file.filename[:-5]  # 去掉 .json 扩展名
+        
+        # 构建保存路径
+        save_path = os.path.join(_wf_files_dir, file.filename)
+        
+        # 保存文件
+        with open(save_path, "wb") as f:
+            f.write(content)
+        
+        logging.info(f"工作流文件 '{workflow_id}' 上传成功")
+        return {"message": f"工作流 '{workflow_id}' 上传成功", "workflow_id": workflow_id}
+    except Exception as e:
+        logging.error(f"上传工作流文件失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"上传工作流文件失败: {str(e)}")
+
+
+@router.delete("/workflows/{workflow_id}")
+async def delete_workflow(
+    workflow_id: str,
+    identity: Dict[str, Any] = Depends(require_roles(["admin"]))
+):
+    """删除工作流文件"""
+    logging.info(f"开始删除工作流: {workflow_id}")
+    try:
+        # 构建文件路径
+        file_path = os.path.join(_wf_files_dir, f"{workflow_id}.json")
+        
+        # 检查文件是否存在
+        if not os.path.exists(file_path):
+            raise HTTPException(status_code=404, detail=f"工作流 '{workflow_id}' 不存在")
+        
+        # 删除文件
+        os.remove(file_path)
+        
+        logging.info(f"工作流 '{workflow_id}' 删除成功")
+        return {"message": f"工作流 '{workflow_id}' 删除成功"}
+    except Exception as e:
+        logging.error(f"删除工作流失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"删除工作流失败: {str(e)}")
