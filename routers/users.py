@@ -49,11 +49,17 @@ class CreateUserRequest(BaseModel):
     password: str = Field(..., description="密码")
     email: str = Field(..., description="邮箱")
     role: str = Field("user", description="角色")
+    groups: Optional[List[str]] = Field(None, description="身分組列表")
 
 
 class ResetPasswordRequest(BaseModel):
     """重置密码请求"""
     new_password: str = Field(..., description="新密码")
+
+
+class UpdateUserGroupsRequest(BaseModel):
+    """更新用户身分組请求"""
+    groups: List[str] = Field(..., description="身分組列表")
 
 
 # ============================
@@ -226,6 +232,10 @@ async def update_user_role(
 
         user = config["users"][user_index]
 
+        # 防止修改admin帳號
+        if user.get("username") == "admin":
+            raise HTTPException(status_code=400, detail="不能修改admin帳號的权限")
+
         # 防止管理员给自己降级
         current_user = identity.get("sub", "")
         if current_user == user_id and request.role != "admin":
@@ -337,13 +347,23 @@ async def create_user(
             "generation_count": 0
         }
 
-        # 设置角色
-        if request.role == "admin":
-            new_user["roles"] = ["admin"]
-        elif request.role == "moderator":
-            new_user["roles"] = ["moderator"]
-        else:  # user
-            new_user["roles"] = ["user"]
+        # 设置角色或身分組
+        if request.groups:
+            # 验证身分組是否存在
+            groups_config = config.get("groups_config", {})
+            invalid_groups = [group for group in request.groups if group not in groups_config]
+            if invalid_groups:
+                raise HTTPException(status_code=400, detail=f"无效的身分組: {invalid_groups}")
+            
+            new_user["groups"] = request.groups
+        else:
+            # 设置角色
+            if request.role == "admin":
+                new_user["roles"] = ["admin"]
+            elif request.role == "moderator":
+                new_user["roles"] = ["moderator"]
+            else:  # user
+                new_user["roles"] = ["user"]
 
         users.append(new_user)
         config["users"] = users
@@ -444,4 +464,51 @@ async def reset_user_password(
         raise
     except Exception as e:
         logging.error(f"重置用户密码失败: {e}")
+
+@router.put("/{user_id}/groups")
+async def update_user_groups(
+    user_id: str,
+    request: UpdateUserGroupsRequest,
+    identity: Dict[str, Any] = Depends(require_roles(["admin"]))
+):
+    """更新用户身分組（仅管理员）"""
+    logging.info(f"管理员更新用户 {user_id} 身分組为 {request.groups}")
+    try:
+        config = _load_auth_config()
+        user_index = _find_user_index(config, user_id)
+
+        if user_index == -1:
+            raise HTTPException(status_code=404, detail=f"用户 {user_id} 不存在")
+
+        user = config["users"][user_index]
+
+        # 防止修改admin帳號
+        if user.get("username") == "admin":
+            raise HTTPException(status_code=400, detail="不能修改admin帳號的权限")
+
+        # 防止管理员修改自己的身分組
+        current_user = identity.get("sub", "")
+        if current_user == user_id:
+            raise HTTPException(status_code=400, detail="不能修改自己的身分組")
+
+        # 验证身分組是否存在
+        groups_config = config.get("groups_config", {})
+        invalid_groups = [group for group in request.groups if group not in groups_config]
+        if invalid_groups:
+            raise HTTPException(status_code=400, detail=f"无效的身分組: {invalid_groups}")
+
+        # 更新身分組
+        user["groups"] = request.groups
+        user.pop("roles", None)  # 移除角色设置
+
+        _save_auth_config(config)
+
+        logging.info(f"用户 {user_id} 身分組更新成功")
+        return {"message": f"用户 {user_id} 身分組已更新为 {request.groups}"}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"更新用户身分組失败: {e}")
+        raise HTTPException(status_code=500, detail=f"更新用户身分組失败: {str(e)}")
         raise HTTPException(status_code=500, detail=f"重置用户密码失败: {str(e)}")

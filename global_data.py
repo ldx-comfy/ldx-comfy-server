@@ -18,6 +18,34 @@ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 if not WORKFLOWS_DIR.exists():
     shutil.copytree("./wf_files", WORKFLOWS_DIR)
 
+# 身分組文件路徑
+GROUPS_FILE = DATA_BASE_PATH / "groups.json"
+
+# 如果身分組文件不存在，則創建一個空的文件
+if not GROUPS_FILE.exists():
+    initial_groups_data = {
+        "groups": {},
+        "system_permissions": {
+            "user:create": "創建用戶",
+            "user:delete": "删除用戶",
+            "user:update": "修改用戶",
+            "user:read": "查看用戶",
+            "user:reset_password": "重置用戶密碼",
+            "workflow:create": "创建工作流",
+            "workflow:delete": "删除工作流",
+            "workflow:update": "修改工作流",
+            "workflow:read": "查看工作流",
+            "workflow:execute": "執行工作流",
+            "history:read": "查看歷史紀錄",
+            "history:delete": "删除歷史紀錄",
+            "group:create": "創建身分組",
+            "group:delete": "删除身分組",
+            "group:update": "修改身分組",
+            "group:read": "查看身分組"
+        }
+    }
+    with open(GROUPS_FILE, "w", encoding="utf-8") as f:
+        json.dump(initial_groups_data, f, ensure_ascii=False, indent=2)
 
 CONFIG_FILE = DATA_BASE_PATH / "config.json"
 
