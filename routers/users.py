@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 
 from auth import config as auth_config
 from routers.auth import get_current_identity, require_roles
+import global_data
 
 router = APIRouter(prefix="/api/v1/admin/users", tags=["用户管理"])
 
@@ -27,6 +28,7 @@ class UserInfo(BaseModel):
     username: str = Field(..., description="用户名")
     email: str = Field(..., description="邮箱")
     role: str = Field(..., description="角色")
+    groups: List[str] = Field(default_factory=list, description="身分組列表")
     status: str = Field(..., description="状态")
     created_at: str = Field(..., description="创建时间")
     last_login: str = Field(..., description="最后登录时间")
@@ -181,7 +183,7 @@ async def get_all_users(identity: Dict[str, Any] = Depends(require_roles(["admin
                 if "generation_count" not in user:
                     user["generation_count"] = 0
 
-                role, _ = _get_user_role_and_groups(user)
+                role, groups = _get_user_role_and_groups(user)
                 status = _get_user_status(user)
                 created_at = _get_user_created_at(user)
                 last_login = _get_user_last_login(user)
@@ -192,6 +194,7 @@ async def get_all_users(identity: Dict[str, Any] = Depends(require_roles(["admin
                     username=username,
                     email=user.get("email", f"{username}@example.com"),
                     role=role,
+                    groups=groups,
                     status=status,
                     created_at=created_at,
                     last_login=last_login,
@@ -350,10 +353,18 @@ async def create_user(
         # 设置角色或身分組
         if request.groups:
             # 验证身分組是否存在
-            groups_config = config.get("groups_config", {})
-            invalid_groups = [group for group in request.groups if group not in groups_config]
-            if invalid_groups:
-                raise HTTPException(status_code=400, detail=f"无效的身分組: {invalid_groups}")
+            # 从身分組配置文件中获取身分組配置
+            import global_data
+            try:
+                with open(global_data.GROUPS_FILE, "r", encoding="utf-8") as f:
+                    groups_config = json.load(f)
+                groups = groups_config.get("groups", {})
+                invalid_groups = [group for group in request.groups if group not in groups]
+                if invalid_groups:
+                    raise HTTPException(status_code=400, detail=f"无效的身分組: {invalid_groups}")
+            except Exception as e:
+                logging.error(f"加载身分組配置失败: {e}")
+                raise HTTPException(status_code=500, detail="加载身分組配置失败")
             
             new_user["groups"] = request.groups
         else:
@@ -464,6 +475,7 @@ async def reset_user_password(
         raise
     except Exception as e:
         logging.error(f"重置用户密码失败: {e}")
+        raise HTTPException(status_code=500, detail=f"重置用户密码失败: {str(e)}")
 
 @router.put("/{user_id}/groups")
 async def update_user_groups(
@@ -492,10 +504,17 @@ async def update_user_groups(
             raise HTTPException(status_code=400, detail="不能修改自己的身分組")
 
         # 验证身分組是否存在
-        groups_config = config.get("groups_config", {})
-        invalid_groups = [group for group in request.groups if group not in groups_config]
-        if invalid_groups:
-            raise HTTPException(status_code=400, detail=f"无效的身分組: {invalid_groups}")
+        # 从身分組配置文件中获取身分組配置
+        try:
+            with open(global_data.GROUPS_FILE, "r", encoding="utf-8") as f:
+                groups_config = json.load(f)
+            groups = groups_config.get("groups", {})
+            invalid_groups = [group for group in request.groups if group not in groups]
+            if invalid_groups:
+                raise HTTPException(status_code=400, detail=f"无效的身分組: {invalid_groups}")
+        except Exception as e:
+            logging.error(f"加载身分組配置失败: {e}")
+            raise HTTPException(status_code=500, detail="加载身分組配置失败")
 
         # 更新身分組
         user["groups"] = request.groups
