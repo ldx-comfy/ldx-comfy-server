@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 
 from auth import jwt as jwt_lib
 from auth import config as auth_config
+from auth import permissions as auth_permissions
 
 
 router = APIRouter(prefix="/api/v1/auth", tags=["鉴权"])
@@ -29,6 +30,12 @@ class LoginRequest(BaseModel):
 
 class CodeRequest(BaseModel):
     code: str = Field(..., description="授权码")
+
+
+class ResetOwnPasswordRequest(BaseModel):
+    """重置自己密码请求"""
+    current_password: str = Field(..., description="当前密码")
+    new_password: str = Field(..., description="新密码")
 
 
 class TokenResponse(BaseModel):
@@ -219,6 +226,68 @@ async def admin_ping(identity: Dict[str, Any] = Depends(require_roles(["admin"])
     管理员测试端点：需要 admin 角色
     """
     return {"ok": True, "sub": identity.get("sub")}
+
+@router.put("/me/reset-password")
+async def reset_own_password(
+    request: ResetOwnPasswordRequest,
+    identity: Dict[str, Any] = Depends(get_current_identity)
+):
+    """重置自己的密码"""
+    current_username = identity.get("sub")
+    logging.info(f"用户 {current_username} 重置自己的密码 (Kilo Code diagnostic check)")
+    try:
+        # 验证新密码
+        if not request.new_password or len(request.new_password) < 6:
+            raise HTTPException(status_code=400, detail="新密码长度至少为6位")
+
+        # 获取当前用户
+        if not current_username:
+            raise HTTPException(status_code=400, detail="无法识别当前用户")
+
+        # 验证用户名是否有效（防止使用无效的JWT token）
+        if not isinstance(current_username, str) or len(current_username.strip()) == 0:
+            raise HTTPException(status_code=400, detail="无效的用户名")
+
+        config = auth_config._load_json_file(auth_config._effective_config_path())
+        if config is None:
+            raise HTTPException(status_code=500, detail="加载认证配置失败")
+
+        user_index = auth_config._find_user_index(config, current_username)
+
+        if user_index == -1:
+            logging.warning(f"JWT token 包含不存在的用户名: {current_username}")
+            raise HTTPException(status_code=401, detail="认证令牌无效，请重新登录")
+
+        user = config["users"][user_index]
+
+        # 验证当前密码
+        current_password_hash = user.get("password_hash")
+        if not current_password_hash:
+            # 如果没有密码哈希，检查明文密码（向后兼容）
+            current_password = user.get("password")
+            if current_password is None or current_password != request.current_password:
+                raise HTTPException(status_code=400, detail="当前密码不正确")
+        else:
+            # 验证密码哈希
+            if not auth_config.verify_password(request.current_password, current_password_hash):
+                raise HTTPException(status_code=400, detail="当前密码不正确")
+
+        # 更新密码
+        user["password_hash"] = auth_config.hash_password(request.new_password)
+
+        auth_config._save_auth_config(config)
+
+        logging.info(f"用户 {current_username} 密码重置成功")
+        return {"message": "密码已重置"}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"重置自己密码失败: {e}")
+        raise HTTPException(status_code=500, detail=f"重置自己密码失败: {str(e)}")
+
+
+
 
 @router.get("/debug/config")
 async def debug_config():

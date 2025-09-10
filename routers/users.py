@@ -55,7 +55,13 @@ class CreateUserRequest(BaseModel):
 
 
 class ResetPasswordRequest(BaseModel):
-    """重置密码请求"""
+    """重置密码请求 (管理员重置他人密码)"""
+    new_password: str = Field(..., description="新密码")
+
+
+class ResetOwnPasswordAdminRequest(BaseModel):
+    """重置自己密码请求 (在管理员界面)"""
+    current_password: str = Field(..., description="当前密码")
     new_password: str = Field(..., description="新密码")
 
 
@@ -104,10 +110,18 @@ def _save_auth_config(config: Dict[str, Any]) -> None:
 
 def _find_user_index(config: Dict[str, Any], user_id: str) -> int:
     """查找用户在配置中的索引"""
+    if not user_id or not isinstance(user_id, str):
+        return -1
+
     users = config.get("users", [])
+    if not isinstance(users, list):
+        return -1
+
     for i, user in enumerate(users):
-        if isinstance(user, dict) and user.get("username", "") == user_id:
-            return i
+        if isinstance(user, dict):
+            username = user.get("username", "")
+            if isinstance(username, str) and username == user_id:
+                return i
     return -1
 
 
@@ -211,6 +225,65 @@ async def get_all_users(identity: Dict[str, Any] = Depends(require_roles(["admin
     except Exception as e:
         logging.error(f"获取用户列表失败: {e}")
         raise HTTPException(status_code=500, detail=f"获取用户列表失败: {str(e)}")
+@router.put("/me/reset-password")
+async def reset_own_password_admin(
+    request: ResetOwnPasswordAdminRequest,
+    identity: Dict[str, Any] = Depends(require_roles(["admin"]))
+):
+    """管理员在管理界面重置自己的密码"""
+    current_username = identity.get("sub")
+    logging.info(f"管理员 {current_username} 在管理界面重置自己的密码")
+    try:
+        # 验证新密码
+        if not request.new_password or len(request.new_password) < 6:
+            raise HTTPException(status_code=400, detail="新密码长度至少为6位")
+
+        # 获取当前用户
+        if not current_username:
+            raise HTTPException(status_code=400, detail="无法识别当前用户")
+
+        # 验证用户名是否有效
+        if not isinstance(current_username, str) or len(current_username.strip()) == 0:
+            raise HTTPException(status_code=400, detail="无效的用户名")
+
+        config = _load_auth_config()
+        users = config.get("users", [])
+        
+        user_index = _find_user_index(config, current_username)
+
+        if user_index == -1:
+            logging.warning(f"JWT token 包含不存在的用户名: {current_username}")
+            raise HTTPException(status_code=401, detail="认证令牌无效，请重新登录")
+
+        user = config["users"][user_index]
+
+        # 验证当前密码
+        current_password_hash = user.get("password_hash")
+        if not current_password_hash:
+            # 如果没有密码哈希，检查明文密码（向后兼容）
+            current_password = user.get("password")
+            if current_password is None or current_password != request.current_password:
+                raise HTTPException(status_code=400, detail="当前密码不正确")
+        else:
+            # 验证密码哈希
+            if not auth_config.verify_password(request.current_password, current_password_hash):
+                raise HTTPException(status_code=400, detail="当前密码不正确")
+
+        # 更新密码
+        user["password_hash"] = auth_config.hash_password(request.new_password)
+
+        _save_auth_config(config)
+
+        logging.info(f"管理员 {current_username} 密码重置成功")
+        return {"message": "密码已重置"}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"管理员重置自己密码失败: {e}")
+        raise HTTPException(status_code=500, detail=f"管理员重置自己密码失败: {str(e)}")
+
+
 
 
 @router.put("/{user_id}/role")
@@ -226,6 +299,10 @@ async def update_user_role(
         valid_roles = ["admin", "moderator", "user"]
         if request.role not in valid_roles:
             raise HTTPException(status_code=400, detail=f"无效的角色: {request.role}")
+
+        # 验证用户名是否有效
+        if not user_id or not isinstance(user_id, str) or len(user_id.strip()) == 0:
+            raise HTTPException(status_code=400, detail="无效的用户名")
 
         config = _load_auth_config()
         user_index = _find_user_index(config, user_id)
@@ -280,6 +357,10 @@ async def update_user_status(
         valid_statuses = ["active", "inactive", "banned"]
         if request.status not in valid_statuses:
             raise HTTPException(status_code=400, detail=f"无效的状态: {request.status}")
+
+        # 验证用户名是否有效
+        if not user_id or not isinstance(user_id, str) or len(user_id.strip()) == 0:
+            raise HTTPException(status_code=400, detail="无效的用户名")
 
         config = _load_auth_config()
         user_index = _find_user_index(config, user_id)
@@ -411,6 +492,10 @@ async def delete_user(
     """删除用户（仅管理员）"""
     logging.info(f"管理员删除用户: {user_id}")
     try:
+        # 验证用户名是否有效
+        if not user_id or not isinstance(user_id, str) or len(user_id.strip()) == 0:
+            raise HTTPException(status_code=400, detail="无效的用户名")
+
         config = _load_auth_config()
         user_index = _find_user_index(config, user_id)
 
@@ -455,6 +540,10 @@ async def reset_user_password(
         if not request.new_password or len(request.new_password) < 6:
             raise HTTPException(status_code=400, detail="密码长度至少为6位")
 
+        # 验证用户名是否有效
+        if not user_id or not isinstance(user_id, str) or len(user_id.strip()) == 0:
+            raise HTTPException(status_code=400, detail="无效的用户名")
+
         config = _load_auth_config()
         user_index = _find_user_index(config, user_id)
 
@@ -486,6 +575,10 @@ async def update_user_groups(
     """更新用户身分組（仅管理员）"""
     logging.info(f"管理员更新用户 {user_id} 身分組为 {request.groups}")
     try:
+        # 验证用户名是否有效
+        if not user_id or not isinstance(user_id, str) or len(user_id.strip()) == 0:
+            raise HTTPException(status_code=400, detail="无效的用户名")
+
         config = _load_auth_config()
         user_index = _find_user_index(config, user_id)
 
@@ -530,4 +623,5 @@ async def update_user_groups(
     except Exception as e:
         logging.error(f"更新用户身分組失败: {e}")
         raise HTTPException(status_code=500, detail=f"更新用户身分組失败: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"重置用户密码失败: {str(e)}")
+
+

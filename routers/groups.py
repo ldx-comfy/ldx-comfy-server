@@ -86,6 +86,22 @@ def _find_group(config: Dict[str, Any], group_id: str) -> Optional[Dict[str, Any
     return groups_config.get(group_id)
 
 
+def _is_valid_permission(permission: str, system_permissions: Dict[str, str]) -> bool:
+    """驗證權限是否有效，支持通配符權限"""
+    # 直接匹配
+    if permission in system_permissions:
+        return True
+    
+    # 通配符匹配 (例如: user:*)
+    if permission.endswith(":*"):
+        prefix = permission[:-2]  # 移除 ":*"
+        for perm_id in system_permissions.keys():
+            if perm_id.startswith(prefix + ":"):
+                return True
+    
+    return False
+
+
 # ============================
 # 路由
 # ============================
@@ -200,7 +216,7 @@ async def create_group(
         
         # 驗證權限
         system_permissions = config.get("system_permissions", {})
-        invalid_permissions = [perm for perm in request.permissions if perm not in system_permissions]
+        invalid_permissions = [perm for perm in request.permissions if not _is_valid_permission(perm, system_permissions)]
         if invalid_permissions:
             raise HTTPException(status_code=400, detail=f"無效的權限: {invalid_permissions}")
 
@@ -264,7 +280,7 @@ async def update_group(
         if request.permissions is not None:
             # 驗證權限
             system_permissions = config.get("system_permissions", {})
-            invalid_permissions = [perm for perm in request.permissions if perm not in system_permissions]
+            invalid_permissions = [perm for perm in request.permissions if not _is_valid_permission(perm, system_permissions)]
             if invalid_permissions:
                 raise HTTPException(status_code=400, detail=f"無效的權限: {invalid_permissions}")
             group_data["permissions"] = request.permissions
@@ -346,3 +362,52 @@ async def get_system_permissions(identity: Dict[str, Any] = Depends(require_role
     except Exception as e:
         logging.error(f"獲取系統權限列表失敗: {e}")
         raise HTTPException(status_code=500, detail=f"獲取系統權限列表失敗: {str(e)}")
+
+
+@router.get("/my/permissions")
+async def get_my_permissions(identity: Dict[str, Any] = Depends(get_current_identity)):
+    """獲取當前用戶的權限列表"""
+    logging.info(f"用戶 {identity.get('sub')} 獲取權限列表")
+    try:
+        # 讀取身分組配置
+        config = _load_groups_config()
+        groups_config = config.get("groups", {})
+        
+        # 獲取用戶的身分組
+        user_groups = identity.get("groups", [])
+        if not isinstance(user_groups, list):
+            user_groups = []
+        
+        # 收集用戶所有權限
+        user_permissions = set()
+        
+        # 從身分組獲取權限
+        for group_id in user_groups:
+            group_data = groups_config.get(group_id, {})
+            if isinstance(group_data, dict) and "permissions" in group_data:
+                for perm in group_data["permissions"]:
+                    user_permissions.add(perm)
+        
+        # 從直接角色獲取權限
+        user_roles = identity.get("roles", [])
+        if isinstance(user_roles, list):
+            for role in user_roles:
+                user_permissions.add(role)
+        
+        # 獲取系統權限說明
+        system_permissions = config.get("system_permissions", {})
+        
+        # 構建返回數據
+        permissions_list = []
+        for perm in user_permissions:
+            permissions_list.append({
+                "id": perm,
+                "name": system_permissions.get(perm, perm)
+            })
+        
+        logging.info(f"成功獲取用戶 {identity.get('sub')} 的權限列表，共 {len(permissions_list)} 個權限")
+        return permissions_list
+
+    except Exception as e:
+        logging.error(f"獲取用戶權限列表失敗: {e}")
+        raise HTTPException(status_code=500, detail=f"獲取用戶權限列表失敗: {str(e)}")

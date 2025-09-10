@@ -432,3 +432,45 @@ def get_effective_config_snapshot() -> Dict[str, Any]:
         "config_path": _effective_config_path(),
         "jwt_secret_from_env": bool(os.environ.get(_ENV_JWT_SECRET)),
     }
+
+
+def check_user_permission(user_groups: List[str], required_permission: str) -> bool:
+    """
+    檢查用戶是否具有指定權限，支持通配符權限檢查。
+    - user_groups: 用戶的身分組列表
+    - required_permission: 需要的權限
+    """
+    # 讀取身分組配置
+    groups_file = str(global_data.GROUPS_FILE)
+    try:
+        with open(groups_file, "r", encoding="utf-8") as f:
+            groups_config = json.load(f)
+    except:
+        groups_config = {"groups": {}}
+    
+    # 收集用戶所有權限
+    user_permissions = set()
+    
+    # 從身分組獲取權限
+    for group_id in user_groups:
+        group_data = groups_config.get("groups", {}).get(group_id, {})
+        if isinstance(group_data, dict) and "permissions" in group_data:
+            for perm in group_data["permissions"]:
+                user_permissions.add(perm)
+    
+    # 檢查權限
+    def _check_permission(req_perm: str) -> bool:
+        # 直接匹配
+        if req_perm in user_permissions:
+            return True
+        
+        # 通配符匹配 (例如: user:*)
+        if req_perm.endswith(":*"):
+            prefix = req_perm[:-2]  # 移除 ":*"
+            for perm in user_permissions:
+                if perm.startswith(prefix + ":"):
+                    return True
+        
+        return False
+    
+    return _check_permission(required_permission)
