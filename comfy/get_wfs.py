@@ -1,6 +1,7 @@
 # 从./wf_files目录下获取所有工作流文件
 import os
 import json
+import config
 from logging_config import get_colorful_logger
 
 # 配置彩色日志
@@ -8,7 +9,7 @@ logger = get_colorful_logger(__name__)
 
 # 获取此文件所在的目录，并构建到 `wf_files` 目录的绝对路径
 _current_dir = os.path.dirname(os.path.abspath(__file__))
-_wf_files_dir = os.path.join(_current_dir, '..', 'wf_files')
+_wf_files_dir = config.WORKFLOWS_DIR
 
 def get_wf_list():
     """
