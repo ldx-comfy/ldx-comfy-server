@@ -34,15 +34,6 @@ _ENV_JWT_SECRET = "JWT_SECRET"
 _ENV_ADMIN_CREDENTIALS_PATH = "AUTH_ADMIN_CREDENTIALS_PATH"
 _ENV_PERSIST_ADMIN_TO_JSON = "AUTH_PERSIST_ADMIN_TO_JSON"
 
-# In-memory effective configuration (read-only from outside)
-_CONFIG: Dict[str, Any] = {
-    "jwt_secret": _DEFAULT_SECRET,
-    "jwt_expires_seconds": _DEFAULT_EXPIRES_SECONDS,
-    "users": [],
-    "codes": [],
-    "groups_map": {},            # group name -> list of roles
-    "default_user_groups": [],   # default groups when subject lacks explicit roles/groups
-}
 
 
 def _effective_config_path() -> str:
@@ -100,7 +91,8 @@ def verify_password(password: str, hashed_password: str) -> bool:
 def _expand_groups_to_roles(groups: List[str]) -> List[str]:
     """Expand groups to roles using groups_map in effective config."""
     roles: List[str] = []
-    gm = _CONFIG.get("groups_map") or {}
+    data = _load_json_file(_effective_config_path())
+    gm = data.get("groups_map") if data else {}
     if not isinstance(gm, dict):
         return roles
     for g in groups or []:
@@ -383,25 +375,32 @@ def _init_config() -> None:
                 logger.warning("Failed to persist 'admin' user to auth.json: %s", e)
 
 
-# Initialize configuration on import
-_init_config()
 
 
 def get_users() -> List[Dict[str, Any]]:
     """Return a copy of configured users list."""
-    return list(_CONFIG.get("users", []))
+    data = _load_json_file(_effective_config_path())
+    if data is None:
+        return []
+    users = data.get("users")
+    return list(users) if isinstance(users, list) else []
 
 
 def get_codes() -> List[Dict[str, Any]]:
     """Return a copy of configured codes list."""
-    return list(_CONFIG.get("codes", []))
+    data = _load_json_file(_effective_config_path())
+    if data is None:
+        return []
+    codes = data.get("codes")
+    return list(codes) if isinstance(codes, list) else []
 
 
 def find_user(username: str) -> Optional[Dict[str, Any]]:
     """Find a user by username."""
     if not username:
         return None
-    for u in _CONFIG.get("users", []):
+    users = get_users()
+    for u in users:
         if isinstance(u, dict) and u.get("username") == username:
             return u
     return None
@@ -412,14 +411,20 @@ def get_jwt_secret() -> str:
     env_secret = os.environ.get(_ENV_JWT_SECRET)
     if env_secret:
         return env_secret
-    cfg_secret = _CONFIG.get("jwt_secret")
+    data = _load_json_file(_effective_config_path())
+    if data is None:
+        return _DEFAULT_SECRET
+    cfg_secret = data.get("jwt_secret")
     return cfg_secret or _DEFAULT_SECRET
 
 
 def get_jwt_expires_seconds() -> int:
     """Get JWT expiration in seconds (default 3600)."""
+    data = _load_json_file(_effective_config_path())
+    if data is None:
+        return _DEFAULT_EXPIRES_SECONDS
     try:
-        return int(_CONFIG.get("jwt_expires_seconds", _DEFAULT_EXPIRES_SECONDS))
+        return int(data.get("jwt_expires_seconds", _DEFAULT_EXPIRES_SECONDS))
     except Exception:
         return _DEFAULT_EXPIRES_SECONDS
 
