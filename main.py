@@ -7,6 +7,7 @@ from routers import include_routers
 from comfy.plugins import plugin_manager
 from logging_config import get_colorful_logger
 from contextlib import asynccontextmanager
+from auth.config import _init_config
 import httpx
 import json
 import time
@@ -46,10 +47,14 @@ async def check_comfyui_connectivity_on_startup(server_address: str):
         logger.warning("   请检查ComfyUI服务配置")
 
 
-# 生命周期管理器
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理器"""
+    # 初始化认证配置
+    logger.info("正在初始化认证系统...")
+    _init_config()
+    logger.info("认证系统初始化完成")
+
     # 启动事件
     logger.info("正在初始化插件系统...")
     plugin_manager.discover_and_register_plugins()

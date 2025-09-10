@@ -34,6 +34,9 @@ _ENV_JWT_SECRET = "JWT_SECRET"
 _ENV_ADMIN_CREDENTIALS_PATH = "AUTH_ADMIN_CREDENTIALS_PATH"
 _ENV_PERSIST_ADMIN_TO_JSON = "AUTH_PERSIST_ADMIN_TO_JSON"
 
+# Global configuration cache
+_CONFIG: Dict[str, Any] = {}
+
 
 
 def _effective_config_path() -> str:
@@ -250,43 +253,28 @@ def _init_config() -> None:
     logger.info("Auth config loaded from %s: %s", path, data)
     if data is None:
         logger.warning("Auth config not found, creating default auth.json file")
-        # Create default configuration
+        # Generate random password for admin
+        admin_password = generate_random_password(16)
+        
+        # Create default configuration with only admin user
         default_config = {
             "jwt_secret": "your-jwt-secret-here-change-in-production",
             "jwt_expires_seconds": 3600,
             "users": [
                 {
                     "username": "admin",
-                    "password_hash": hash_password("admin123"),
+                    "password_hash": hash_password(admin_password),
                     "roles": ["admin"],
                     "email": "admin@example.com",
                     "status": "active",
                     "created_at": datetime.now(timezone.utc).isoformat(),
                     "last_login": datetime.now(timezone.utc).isoformat(),
                     "generation_count": 0
-                },
-                {
-                    "username": "user1",
-                    "password_hash": hash_password("user123"),
-                    "roles": ["user"],
-                    "email": "user1@example.com",
-                    "status": "active",
-                    "created_at": datetime.now(timezone.utc).isoformat(),
-                    "last_login": datetime.now(timezone.utc).isoformat(),
-                    "generation_count": 0
                 }
             ],
-            "codes": [
-                {
-                    "code": "TEMP123",
-                    "expires_at": "2025-12-31T23:59:59Z",
-                    "roles": ["user"],
-                    "description": "临时访问码"
-                }
-            ],
+            "codes": [],
             "groups_map": {
                 "admin": ["admin", "user"],
-                "moderator": ["moderator", "user"],
                 "user": ["user"]
             },
             "default_user_groups": ["user"]
@@ -299,6 +287,7 @@ def _init_config() -> None:
                 json.dump(default_config, f, ensure_ascii=False, indent=2)
                 f.write("\n")
             logger.info("Created default auth.json file at %s", path)
+            logger.warning("Generated admin user with random password: %s", admin_password)
             data = default_config
         except Exception as e:
             logger.error("Failed to create default auth.json file: %s", e)
