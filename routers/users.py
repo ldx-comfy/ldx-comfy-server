@@ -50,7 +50,6 @@ class CreateUserRequest(BaseModel):
     username: str = Field(..., description="用户名")
     password: str = Field(..., description="密码")
     email: str = Field(..., description="邮箱")
-    role: str = Field("user", description="角色")
     groups: Optional[List[str]] = Field(None, description="身分組列表")
 
 
@@ -284,8 +283,6 @@ async def reset_own_password_admin(
         raise HTTPException(status_code=500, detail=f"管理员重置自己密码失败: {str(e)}")
 
 
-
-
 @router.put("/{user_id}/role")
 async def update_user_role(
     user_id: str,
@@ -331,7 +328,7 @@ async def update_user_role(
         else:  # user
             user["roles"] = ["user"]
             user.pop("groups", None)
-
+            
         _save_auth_config(config)
 
         logging.info(f"用户 {user_id} 角色更新成功")
@@ -406,11 +403,6 @@ async def create_user(
         if not request.password or len(request.password) < 6:
             raise HTTPException(status_code=400, detail="密码长度至少为6位")
 
-        # 验证角色
-        valid_roles = ["admin", "moderator", "user"]
-        if request.role not in valid_roles:
-            raise HTTPException(status_code=400, detail=f"无效的角色: {request.role}")
-
         config = _load_auth_config()
         users = config.get("users", [])
 
@@ -431,7 +423,7 @@ async def create_user(
             "generation_count": 0
         }
 
-        # 设置角色或身分組
+        # 设置身分組，如果未提供身分組，则设置默认为普通用户角色
         if request.groups:
             # 验证身分組是否存在
             # 从身分組配置文件中获取身分組配置
@@ -445,17 +437,15 @@ async def create_user(
                     raise HTTPException(status_code=400, detail=f"无效的身分組: {invalid_groups}")
             except Exception as e:
                 logging.error(f"加载身分組配置失败: {e}")
-                raise HTTPException(status_code=500, detail="加载身分組配置失败")
+                raise HTTPException(status_code=500, detail="加载身分組失败")
             
             new_user["groups"] = request.groups
+            # 当设置了身分組时，移除 roles 字段，避免冲突
+            new_user.pop("roles", None)
         else:
-            # 设置角色
-            if request.role == "admin":
-                new_user["roles"] = ["admin"]
-            elif request.role == "moderator":
-                new_user["roles"] = ["moderator"]
-            else:  # user
-                new_user["roles"] = ["user"]
+            # 如果没有提供身分組，则将角色设置为普通用户
+            new_user["roles"] = ["user"]
+            new_user.pop("groups", None) # 移除 groups 字段，避免冲突
 
         users.append(new_user)
         config["users"] = users
@@ -467,7 +457,8 @@ async def create_user(
             id=request.username,
             username=request.username,
             email=new_user["email"],
-            role=role,
+            role=role, # 这里 role 会根据 _get_user_role_and_groups 再次解析
+            groups=new_user.get("groups", []), # 添加 groups 字段
             status=new_user["status"],
             created_at=new_user["created_at"],
             last_login=new_user["last_login"],
@@ -623,5 +614,3 @@ async def update_user_groups(
     except Exception as e:
         logging.error(f"更新用户身分組失败: {e}")
         raise HTTPException(status_code=500, detail=f"更新用户身分組失败: {str(e)}")
-
-

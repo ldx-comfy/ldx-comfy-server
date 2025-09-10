@@ -474,3 +474,21 @@ def check_user_permission(user_groups: List[str], required_permission: str) -> b
         return False
     
     return _check_permission(required_permission)
+
+
+def _save_auth_config(config: Dict[str, Any]) -> None:
+    """保存认证配置"""
+    path = _effective_config_path()
+    try:
+        # 创建备份
+        if os.path.exists(path):
+            backup_path = path + ".bak"
+            import shutil
+            shutil.copy2(path, backup_path)
+
+        # 保存新配置
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(config, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.error(f"保存认证配置失败: {e}")
+        raise Exception(f"保存认证配置失败: {str(e)}")
