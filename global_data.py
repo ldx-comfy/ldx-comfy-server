@@ -19,33 +19,74 @@ if not WORKFLOWS_DIR.exists():
     shutil.copytree("./wf_files", WORKFLOWS_DIR)
 
 # 身分組文件路徑
-GROUPS_FILE = DATA_BASE_PATH / "groups.json"
+# 認證信息文件路徑 (包含用戶、身分組等配置)
+AUTH_FILE = DATA_BASE_PATH / "auth.json"
 
-# 如果身分組文件不存在，則創建一個空的文件
-if not GROUPS_FILE.exists():
-    initial_groups_data = {
-        "groups": {},
-        "system_permissions": {
-            "user:create": "創建用戶",
-            "user:delete": "删除用戶",
-            "user:update": "修改用戶",
-            "user:read": "查看用戶",
-            "user:reset_password": "重置用戶密碼",
-            "workflow:create": "创建工作流",
-            "workflow:delete": "删除工作流",
-            "workflow:update": "修改工作流",
-            "workflow:read": "查看工作流",
-            "workflow:execute": "執行工作流",
-            "history:read": "查看歷史紀錄",
-            "history:delete": "删除歷史紀錄",
-            "group:create": "創建身分組",
-            "group:delete": "删除身分組",
-            "group:update": "修改身分組",
-            "group:read": "查看身分組"
-        }
+# 身分組權限列表 (用於前端展示和後端權限定義參考)
+# 這裡定義的權限會被加載到 auth.json 的初始 groups 設置中
+SYSTEM_PERMISSIONS = {
+    "admin:access": "訪問管理面板",
+    "admin:users:read": "查看用戶信息",
+    "admin:users:manage": "管理用戶 (增刪改查、重置密碼、修改身分組/角色/狀態)",
+    "admin:groups:read": "查看身分組信息",
+    "admin:groups:manage": "管理身分組 (增刪改)",
+    "admin:workflows:read": "查看工作流列表",
+    "admin:workflows:manage": "管理工作流 (上傳、删除)",
+    "admin:history:read": "查看所有執行歷史",
+    "admin:codes:read": "查看授權碼",
+    "admin:codes:manage": "管理授權碼 (增刪)",
+    "workflow:read:*": "讀取所有工作流 (通配符)",
+    "workflow:execute:*": "執行所有工作流 (通配符)",
+    "user:read:self": "查看自己的用戶信息",
+    "user:update:self": "更新自己的用戶信息",
+    "user:reset_password:self": "重置自己的密碼",
+    "history:read:self": "查看自己的執行歷史"
+}
+
+# 確保 AUTH_FILE 存在且初始化
+if not AUTH_FILE.exists():
+    initial_auth_data = {
+        "jwt_secret": "your-jwt-secret-here-change-in-production",
+        "jwt_expires_seconds": 3600,
+        "users": [],
+        "codes": [],
+        "groups": {
+            "admin": {
+                "name": "Admin Group",
+                "description": "擁有所有管理面板權限",
+                "permissions": list(SYSTEM_PERMISSIONS.keys()),
+                "level": 100
+            },
+            "user": {
+                "name": "User Group",
+                "description": "普通用戶，具備基本操作權限",
+                "permissions": [
+                    "workflow:read:*",
+                    "workflow:execute:*",
+                    "user:read:self",
+                    "user:update:self",
+                    "user:reset_password:self",
+                    "history:read:self"
+                ],
+                "level": 10
+            }
+        },
+        "default_user_groups": ["user"]
     }
-    with open(GROUPS_FILE, "w", encoding="utf-8") as f:
-        json.dump(initial_groups_data, f, ensure_ascii=False, indent=2)
+    with open(AUTH_FILE, "w", encoding="utf-8") as f:
+        json.dump(initial_auth_data, f, ensure_ascii=False, indent=2)
+
+# 新增一个用于从 AUTH_FILE 读取 groups 的全局变量
+AUTH_CONFIG = {}
+def load_auth_config():
+    global AUTH_CONFIG
+    if AUTH_FILE.exists():
+        with open(AUTH_FILE, "r", encoding="utf-8") as f:
+            AUTH_CONFIG = json.load(f)
+load_auth_config() # 服務啟動時加載
+
+# 修改 permissions.py 以使用 AUTH_CONFIG.get("groups", {})
+# 而不是直接讀取文件，會更高效和統一
 
 CONFIG_FILE = DATA_BASE_PATH / "config.json"
 

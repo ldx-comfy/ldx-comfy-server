@@ -27,44 +27,24 @@ import global_data
 logger = logging.getLogger(__name__)
 
 _DEFAULT_SECRET = "change-me"
-_DEFAULT_EXPIRES_SECONDS = 604800  # 7 days in seconds for temporary validity
+_DEFAULT_EXPIRES_SECONDS = 604800 # 7 days in seconds for temporary validity
 
-_ENV_CONFIG_PATH = "AUTH_CONFIG_PATH"
 _ENV_JWT_SECRET = "JWT_SECRET"
 _ENV_ADMIN_CREDENTIALS_PATH = "AUTH_ADMIN_CREDENTIALS_PATH"
 _ENV_PERSIST_ADMIN_TO_JSON = "AUTH_PERSIST_ADMIN_TO_JSON"
 
-# Global configuration cache
-_CONFIG: Dict[str, Any] = {}
-
+# _CONFIG 現在直接指向 global_data.AUTH_CONFIG，是整個應用程序的唯一認證配置源。
+_CONFIG = global_data.AUTH_CONFIG
 
 
 def _effective_config_path() -> str:
-    """Return the effective config path from env or default 'auth.json'."""
-    return str(global_data.DATA_BASE_PATH / "auth.json")
-
-
-def _load_json_file(path: str) -> Optional[Dict[str, Any]]:
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        if not isinstance(data, dict):
-            logger.warning("Auth config root must be an object, got %s", type(data).__name__)
-            return None
-        return data
-    except FileNotFoundError:
-        logger.warning("Auth config not found at %s", os.path.abspath(path))
-    except json.JSONDecodeError as e:
-        logger.warning("Auth config JSON parse error at %s: %s", os.path.abspath(path), e)
-    except Exception as e:
-        logger.warning("Auth config load error at %s: %s", os.path.abspath(path), e)
-    return None
+    """返回有效的配置路徑 (直接使用 global_data.AUTH_FILE)。"""
+    return str(global_data.AUTH_FILE)
 
 
 def generate_random_password(length: int = 16) -> str:
     """
-    Generate a cryptographically secure random password with given length
-    containing [a-zA-Z0-9].
+    生成一個指定長度的隨機密碼，包含大小寫字母和數字。
     """
     alphabet = string.ascii_letters + string.digits
     return "".join(secrets.choice(alphabet) for _ in range(max(1, int(length))))
@@ -72,19 +52,19 @@ def generate_random_password(length: int = 16) -> str:
 
 def hash_password(password: str) -> str:
     """
-    Hash a password using SHA256 with salt.
-    Returns the hex digest of the hash.
+    使用 SHA256 和鹽值哈希密碼。
+    返回哈希值的十六進制字符串。
     """
     if not password:
         return ""
-    # Add a simple salt (in production, use a proper salt)
+    # 在生產環境中，應使用更強的鹽值和密碼哈希算法 (例如 bcrypt, scrypt)
     salted_password = password + "comfyui_auth_salt"
     return hashlib.sha256(salted_password.encode('utf-8')).hexdigest()
 
 
 def verify_password(password: str, hashed_password: str) -> bool:
     """
-    Verify a password against its hash.
+    驗證密碼是否與給定的哈希值匹配。
     """
     if not password or not hashed_password:
         return False
@@ -92,77 +72,140 @@ def verify_password(password: str, hashed_password: str) -> bool:
 
 
 def _expand_groups_to_roles(groups: List[str]) -> List[str]:
-    """Expand groups to roles using groups_map in effective config."""
-    roles: List[str] = []
-    data = _load_json_file(_effective_config_path())
-    gm = data.get("groups_map") if data else {}
-    if not isinstance(gm, dict):
-        return roles
-    for g in groups or []:
-        if not isinstance(g, str):
+    """擴展身分組到角色 (目前簡化為不擴展，所有權限都在身分組中直接定義)。"""
+    # 在新的模型中，直接從 group 的 permissions 獲取，不再使用 groups_map 進行角色映射
+    # 因為現在權限已經是細粒度定義
+    return [] # 由於簡化權限系統，roles 將從 groups 中的 permissions 內解析
+
+
+def _get_admin_groups(user_groups: List[str]) -> List[str]:
+    """
+    根據用戶所屬的身分組，判斷哪些身分組應被視為 admin。
+    如果身分組 (直接或間接) 包含 "admin:access" 或其他 admin-level 權限，
+    或者其 level 屬性達到或超過 100，則該身分組被視為 admin。
+    """
+    admin_groups: List[str] = []
+    
+    # 從全局配置中獲取身分組數據
+    groups_config = _CONFIG.get("groups", {})
+
+    # 管理員級別權限模式，用於判斷身分組是否為管理員性質
+    admin_permission_patterns = [
+        "admin:", # 匹配所有 admin: 開頭的權限
+        "workflow:read:*", # 示例性地包含一些管理員常有的通配符權限
+        "workflow:execute:*" # 示例性地包含一些管理員常有的通配符權限
+    ]
+
+    for group_id in user_groups:
+        if not isinstance(group_id, str):
             continue
-        mapped = gm.get(g)
-        if isinstance(mapped, list):
-            for r in mapped:
-                if isinstance(r, str):
-                    roles.append(r)
-    # dedupe while preserving order
-    seen = set()
-    out: List[str] = []
-    for r in roles:
-        if r not in seen:
-            seen.add(r)
-            out.append(r)
-    return out
+
+        group_data = groups_config.get(group_id, {})
+        if isinstance(group_data, dict):
+            permissions = group_data.get("permissions", [])
+            has_admin_level_permissions = False
+
+            for perm in permissions:
+                if isinstance(perm, str):
+                    for pattern in admin_permission_patterns:
+                        if pattern.endswith(":") and perm.startswith(pattern):
+                            has_admin_level_permissions = True
+                            break
+                        elif pattern.endswith(":*") and perm.startswith(pattern[:-1]):
+                            has_admin_level_permissions = True
+                            break
+                        elif perm == pattern:
+                            has_admin_level_permissions = True
+                            break
+                    if has_admin_level_permissions:
+                        break
+            
+            if has_admin_level_permissions:
+                admin_groups.append(group_id)
+                continue
+
+            # 兼容舊的 level >= 100 判斷
+            level = group_data.get("level", 0)
+            if level >= 100:
+                admin_groups.append(group_id)
+
+    return admin_groups
 
 
-def resolve_effective_roles(subject: Dict[str, Any]) -> Tuple[List[str], List[str]]:
+def resolve_effective_roles(subject: Dict[str, Any]) -> Tuple[List[str], List[str], List[str]]: # 修改返回類型
     """
-    Resolve effective (roles, groups) for a user or a code record.
-
-    Rules:
-    - roles = explicit roles (if any) ∪ roles expanded from groups via groups_map
-    - groups = explicit groups (if any); if both roles and groups are absent, fall back to default_user_groups
+    為用戶或授權碼記錄解析有效的 (角色, 身分組)。
+    規則:
+    - roles = 顯式角色 (如果有) ∪ 從身分組中解析出的角色 (例如，如果身分組具有 admin 權限，則獲得 "admin" 角色)
+    - groups = 顯式身分組 (如果有)；如果角色和身分組都缺失，則回退到 default_user_groups
+    - 動態 admin 角色分配: 具有 admin-level 權限的身分組自動獲得 admin 角色
     """
-    # explicit
+    logger.debug(f"resolve_effective_roles: 收到 subject={subject}")
+
     raw_roles = subject.get("roles")
     raw_groups = subject.get("groups")
 
     roles: List[str] = [r for r in raw_roles if isinstance(r, str)] if isinstance(raw_roles, list) else []
     groups: List[str] = [g for g in raw_groups if isinstance(g, str)] if isinstance(raw_groups, list) else []
 
-    # fallback groups only when both explicit roles and groups are absent
     if not groups and not roles:
         dug = _CONFIG.get("default_user_groups")
         if isinstance(dug, list):
             groups = [g for g in dug if isinstance(g, str)]
+    
+    logger.debug(f"resolve_effective_roles: 初始 roles={roles}, groups={groups}")
 
-    # expand groups to roles and merge
-    expanded = _expand_groups_to_roles(groups)
-    # merge and dedupe while preserving order (explicit roles first)
+    # Dynamic admin role assignment for high-level groups
+    admin_groups = _get_admin_groups(groups)
+    if admin_groups and "admin" not in roles: # 如果有 admin-level 的身分組，確保 "admin" 角色存在
+        roles.append("admin")
+    
+    logger.debug(f"resolve_effective_roles: 處理 admin_groups 後 roles={roles}")
+
+    # 因為目前 _expand_groups_to_roles 簡化為不返回角色，所以直接使用當前 roles
+    merged_roles: List[str] = []
     seen = set()
-    merged: List[str] = []
-    for r in roles + expanded:
+    for r in roles: # 只處理顯式角色和動態添加的 "admin" 角色
         if r not in seen:
             seen.add(r)
-            merged.append(r)
+            merged_roles.append(r)
+    
+    logger.debug(f"resolve_effective_roles: 合併後 merged_roles={merged_roles}")
 
-    return merged, groups
+    # 收集所有細粒度權限
+    all_permissions = set()
+    groups_config = _CONFIG.get("groups", {})
+    for group_id in groups:
+        group_data = groups_config.get(group_id, {})
+        if isinstance(group_data, dict) and "permissions" in group_data:
+            for perm in group_data["permissions"]:
+                all_permissions.add(perm)
+    
+    # 動態添加 admin:access 權限，如果用戶最終具有 "admin" 角色
+    # 注意: 這裡已經在 _get_admin_groups 中邏輯性地觸發了 "admin" 角色，
+    # 而 "admin" 身分組的 permissions 中已經直接包含了 "admin:access"。
+    # 這行應該是保證 admin 角色在 JWT 中也能直觀表達為一個權限。
+    if "admin" in merged_roles:
+        all_permissions.add("admin:access")
+    
+    logger.debug(f"resolve_effective_roles: 最終 all_permissions={list(all_permissions)}")
+
+    return merged_roles, groups, list(all_permissions) # 返回包含 permissions 的三元組
 
 
 def parse_expires_at(expires_at: str) -> Optional[int]:
     """
-    Parse ISO-8601 datetime string to epoch seconds.
-    - Accepts 'Z' suffix (UTC) and timezone offsets.
-    - If naive (no tzinfo), treat as local time.
-    Returns epoch seconds or None if parse fails.
+    將 ISO-8601 日期時間字符串解析為 epoch 秒數。
+    - 接受 'Z' 後綴 (UTC) 和時區偏移。
+    - 如果是 Naive (沒有時區信息)，則視為本地時間。
+    返回 epoch 秒數，如果解析失敗則返回 None。
     """
     if not isinstance(expires_at, str) or not expires_at.strip():
         return None
     s = expires_at.strip()
 
-    # Normalize trailing 'Z' to '+00:00' for fromisoformat
-    if s.endswith("Z") or s.endswith("z"):
+    # 將尾隨的 'Z' 規範化為 '+00:00' 以便 fromisoformat 處理
+    if s.lower().endswith("z"):
         s = s[:-1] + "+00:00"
 
     try:
@@ -171,7 +214,7 @@ def parse_expires_at(expires_at: str) -> Optional[int]:
         return None
 
     if dt.tzinfo is None:
-        # Naive datetime - treat as local time
+        # Naive datetime - 視為本地時間
         return int(_time.mktime(dt.timetuple()))
     else:
         return int(dt.timestamp())
@@ -179,7 +222,7 @@ def parse_expires_at(expires_at: str) -> Optional[int]:
 
 def is_code_expired(expires_at: str) -> bool:
     """
-    Return True if the code is expired or invalid.
+    如果授權碼已過期或無效，則返回 True。
     """
     ts = parse_expires_at(expires_at)
     if ts is None:
@@ -190,28 +233,28 @@ def is_code_expired(expires_at: str) -> bool:
 
 def _persist_admin_credentials_file(username: str, password: str, out_path: str) -> None:
     """
-    Write admin credentials to out_path in JSON format and chmod 0600. Best-effort.
+    將管理員憑據以 JSON 格式寫入 out_path，並設置文件權限為 0600。盡力而為。
     """
     try:
         os.makedirs(os.path.dirname(out_path), exist_ok=True)
     except Exception:
-        # If dirname is empty or not creatable, ignore
+        # 如果目錄名為空或無法創建，則忽略
         pass
     data = {"username": username, "password": password}
     with open(out_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+        json.dump(data, f, ensure_ascii=True, indent=2) # 確保 ASCII，因為這是配置文件
         f.write("\n")
     try:
         os.chmod(out_path, 0o600)
     except Exception:
-        # Ignore chmod failures on non-POSIX filesystems
+        # 在非 POSIX 文件系統上忽略 chmod 失敗
         pass
 
 
 def _maybe_persist_admin_to_json(cfg_path: str, admin_user: Dict[str, Any]) -> None:
     """
-    If cfg_path exists and is writable, append the admin user to users[] and atomically persist.
-    Create a .bak backup first. Best-effort; swallow errors as warnings.
+    如果 cfg_path 存在且可寫，將管理員用戶添加到 users[] 中並原子地持久化。
+    首先創建 .bak 備份。盡力而為；將錯誤記錄為警告。
     """
     if not cfg_path:
         return
@@ -230,16 +273,16 @@ def _maybe_persist_admin_to_json(cfg_path: str, admin_user: Dict[str, Any]) -> N
             users = []
         users.append(admin_user)
         orig["users"] = users
-        # Backup
+        # 備份
         bak = cfg_path + ".bak"
         try:
             shutil.copy2(cfg_path, bak)
         except Exception as e:
             logger.warning("Failed to create backup %s: %s", bak, e)
-        # Atomic write via temp then replace
+        # 通過臨時文件進行原子寫入，然後替換
         tmp = cfg_path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(orig, f, ensure_ascii=False, indent=2)
+            json.dump(orig, f, ensure_ascii=True, indent=2)
             f.write("\n")
         os.replace(tmp, cfg_path)
     except Exception as e:
@@ -247,24 +290,23 @@ def _maybe_persist_admin_to_json(cfg_path: str, admin_user: Dict[str, Any]) -> N
 
 
 def _init_config() -> None:
-    path = _effective_config_path()
-    logger.info("Attempting to load auth config from: %s", path)
-    data = _load_json_file(path)
-    logger.info("Auth config loaded from %s: %s", path, data)
-    if data is None:
-        logger.warning("Auth config not found, creating default auth.json file")
-        # Generate random password for admin
-        admin_password = generate_random_password(16)
+    """
+    初始化配置。現在主要從 global_data.AUTH_CONFIG 加載。
+    如果 global_data.AUTH_CONFIG 為空 (auth.json 不存在或加載失敗)，則生成默認配置。
+    """
+    global _CONFIG # 確保我們修改的是這個模塊的 _CONFIG 引用
+    if not global_data.AUTH_CONFIG: # 如果 global_data 中的配置為空，說明 auth.json 未成功加載
+        logger.warning("global_data.AUTH_CONFIG is empty, creating default auth config for auth/config.py")
+        admin_pw = generate_random_password(16)
         
-        # Create default configuration with only admin user
         default_config = {
             "jwt_secret": "your-jwt-secret-here-change-in-production",
-            "jwt_expires_seconds": 604800,  # 7 days for temporary validity
+            "jwt_expires_seconds": _DEFAULT_EXPIRES_SECONDS,
             "users": [
                 {
                     "username": "admin",
-                    "password_hash": hash_password(admin_password),
-                    "roles": ["admin"],
+                    "password_hash": hash_password(admin_pw),
+                    "groups": ["admin"], # 使用 groups 替代 roles
                     "email": "admin@example.com",
                     "status": "active",
                     "created_at": datetime.now(timezone.utc).isoformat(),
@@ -273,119 +315,67 @@ def _init_config() -> None:
                 }
             ],
             "codes": [],
-            "groups_map": {
-                "admin": ["admin", "user"],
-                "user": ["user"]
+            "groups": { # 新的 groups 結構
+                "admin": {
+                    "name": "Admin Group",
+                    "description": "擁有所有管理面板權限",
+                    "permissions": list(global_data.SYSTEM_PERMISSIONS.keys()),
+                    "level": 100
+                },
+                "user": {
+                    "name": "User Group",
+                    "description": "普通用戶，具備基本操作權限",
+                    "permissions": [
+                        "workflow:read:*",
+                        "workflow:execute:*",
+                        "user:read:self",
+                        "user:update:self",
+                        "user:reset_password:self",
+                        "history:read:self"
+                    ],
+                    "level": 10
+                }
             },
             "default_user_groups": ["user"]
         }
+        _CONFIG.update(default_config) # 更新到局部的 _CONFIG
+        logger.warning(
+            "Generated in-memory default admin user with random password: %s.\n"
+            "This configuration is not persisted to disk. Please configure auth.json properly.",
+            admin_pw
+        )
+    else:
+        _CONFIG.update(global_data.AUTH_CONFIG) # 從 global_data 加載
 
-        # Write default config to file
-        try:
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(default_config, f, ensure_ascii=False, indent=2)
-                f.write("\n")
-            logger.info("Created default auth.json file at %s", path)
-            logger.warning("Generated admin user with random password: %s", admin_password)
-            data = default_config
-        except Exception as e:
-            logger.error("Failed to create default auth.json file: %s", e)
-            logger.warning("Using default auth config: empty users/codes, default JWT settings")
-            data = {}
-
-    # Merge with defaults
+    # JWT secret 和 expires_seconds 仍然需要從這裡處理環境變量覆蓋
+    _CONFIG["jwt_secret"] = os.environ.get(_ENV_JWT_SECRET) or _CONFIG.get("jwt_secret", _DEFAULT_SECRET) or _DEFAULT_SECRET
     try:
-        _CONFIG["jwt_secret"] = data.get("jwt_secret", _DEFAULT_SECRET) or _DEFAULT_SECRET
-        _CONFIG["jwt_expires_seconds"] = int(data.get("jwt_expires_seconds", _DEFAULT_EXPIRES_SECONDS))
+        _CONFIG["jwt_expires_seconds"] = int(_CONFIG.get("jwt_expires_seconds", _DEFAULT_EXPIRES_SECONDS))
     except Exception:
         logger.warning("Invalid jwt_expires_seconds in config; using default %d", _DEFAULT_EXPIRES_SECONDS)
         _CONFIG["jwt_expires_seconds"] = _DEFAULT_EXPIRES_SECONDS
 
-    users = data.get("users")
-    codes = data.get("codes")
-    _CONFIG["users"] = users if isinstance(users, list) else []
-    _CONFIG["codes"] = codes if isinstance(codes, list) else []
-    logger.info("Effective users list: %s", _CONFIG.get("users", []))
+    # 確保 users, codes, groups, default_user_groups 都是列表或字典
+    _CONFIG["users"] = _CONFIG.get("users", []) if isinstance(_CONFIG.get("users"), list) else []
+    _CONFIG["codes"] = _CONFIG.get("codes", []) if isinstance(_CONFIG.get("codes"), list) else []
+    _CONFIG["groups"] = _CONFIG.get("groups", {}) if isinstance(_CONFIG.get("groups"), dict) else {}
+    _CONFIG["default_user_groups"] = _CONFIG.get("default_user_groups", []) if isinstance(_CONFIG.get("default_user_groups"), list) else []
 
-    if not isinstance(_CONFIG["users"], list):
-        _CONFIG["users"] = []
-    if not isinstance(_CONFIG["codes"], list):
-        _CONFIG["codes"] = []
-
-    # RBAC: groups_map and default_user_groups
-    gm = data.get("groups_map")
-    _CONFIG["groups_map"] = gm if isinstance(gm, dict) else {}
-
-    dug = data.get("default_user_groups")
-    if isinstance(dug, list):
-        _CONFIG["default_user_groups"] = [g for g in dug if isinstance(g, str)]
-    else:
-        _CONFIG["default_user_groups"] = []
-
-    # Default admin injection if not present
-    has_admin = any(isinstance(u, dict) and u.get("username") == "admin" for u in _CONFIG["users"])
-    if not has_admin:
-        admin_pw = generate_random_password(16)
-        admin_user: Dict[str, Any] = {"username": "admin", "password_hash": hash_password(admin_pw)}
-        # Prefer groups=["admin"] if groups_map.admin exists; otherwise roles=["admin"]
-        if isinstance(_CONFIG.get("groups_map"), dict) and "admin" in _CONFIG["groups_map"]:
-            admin_user["groups"] = ["admin"]
-        else:
-            admin_user["roles"] = ["admin"]
-
-        # Inject in-memory only by default
-        _CONFIG["users"].append(admin_user)
-
-        # WARNING log with password disclosure and guidance
-        logger.warning(
-            "No 'admin' user found in auth config; generated default admin with random password.\n"
-            "Username: admin\nPassword: %s\n"
-            "This admin exists only in memory by default. Persist it to auth.json or provide environment variables. "
-            "Rotate this initial password as soon as possible.",
-            admin_pw,
-        )
-
-        # Optional persistence strategies
-        cred_path = os.environ.get(_ENV_ADMIN_CREDENTIALS_PATH)
-        if cred_path:
-            try:
-                _persist_admin_credentials_file("admin", admin_pw, cred_path)
-                logger.warning("Admin initial credentials written to %s with mode 0600", cred_path)
-            except Exception as e:
-                logger.warning("Failed to write admin credentials to %s: %s", cred_path, e)
-
-        persist_flag = os.environ.get(_ENV_PERSIST_ADMIN_TO_JSON, "").lower() == "true"
-        if persist_flag:
-            try:
-                _maybe_persist_admin_to_json(path, admin_user)
-                logger.warning("Attempted to persist 'admin' user into auth.json if writable")
-            except Exception as e:
-                logger.warning("Failed to persist 'admin' user to auth.json: %s", e)
-
-
+    logger.debug("Auth config fully loaded. Effective users count: %d", len(_CONFIG["users"]))
 
 
 def get_users() -> List[Dict[str, Any]]:
-    """Return a copy of configured users list."""
-    data = _load_json_file(_effective_config_path())
-    if data is None:
-        return []
-    users = data.get("users")
-    return list(users) if isinstance(users, list) else []
+    """返回已配置用戶列表的副本。"""
+    return list(_CONFIG.get("users", []))
 
 
 def get_codes() -> List[Dict[str, Any]]:
-    """Return a copy of configured codes list."""
-    data = _load_json_file(_effective_config_path())
-    if data is None:
-        return []
-    codes = data.get("codes")
-    return list(codes) if isinstance(codes, list) else []
+    """返回已配置授權碼列表的副本。"""
+    return list(_CONFIG.get("codes", []))
 
 
 def find_user(username: str) -> Optional[Dict[str, Any]]:
-    """Find a user by username."""
+    """通過用戶名查找用戶。"""
     if not username:
         return None
     users = get_users()
@@ -396,42 +386,29 @@ def find_user(username: str) -> Optional[Dict[str, Any]]:
 
 
 def get_jwt_secret() -> str:
-    """Get JWT secret with priority: ENV JWT_SECRET > config > default."""
+    """獲取 JWT 密鑰，優先級：ENV JWT_SECRET > config > 默認。"""
     env_secret = os.environ.get(_ENV_JWT_SECRET)
     if env_secret:
         return env_secret
-    data = _load_json_file(_effective_config_path())
-    if data is None:
-        return _DEFAULT_SECRET
-    cfg_secret = data.get("jwt_secret")
-    return cfg_secret or _DEFAULT_SECRET
+    return _CONFIG.get("jwt_secret", _DEFAULT_SECRET) or _DEFAULT_SECRET
 
 
 def get_jwt_expires_seconds() -> int:
-    """Get JWT expiration in seconds (default 3600)."""
-    data = _load_json_file(_effective_config_path())
-    if data is None:
-        return _DEFAULT_EXPIRES_SECONDS
-    try:
-        return int(data.get("jwt_expires_seconds", _DEFAULT_EXPIRES_SECONDS))
-    except Exception:
-        return _DEFAULT_EXPIRES_SECONDS
+    """獲取 JWT 到期時間 (秒，默認為 3600)。"""
+    return _CONFIG.get("jwt_expires_seconds", _DEFAULT_EXPIRES_SECONDS)
 
 
 def get_effective_config_snapshot() -> Dict[str, Any]:
     """
-    Return a shallow copy of the effective config (for diagnostics or tests).
+    返回有效配置的淺拷貝 (用於診斷或測試)。
     """
-    return {
-        "jwt_secret": _CONFIG.get("jwt_secret"),
-        "jwt_expires_seconds": _CONFIG.get("jwt_expires_seconds"),
-        "users": list(_CONFIG.get("users", [])),
-        "codes": list(_CONFIG.get("codes", [])),
-        "groups_map": dict(_CONFIG.get("groups_map", {})) if isinstance(_CONFIG.get("groups_map"), dict) else {},
-        "default_user_groups": list(_CONFIG.get("default_user_groups", [])),
-        "config_path": _effective_config_path(),
-        "jwt_secret_from_env": bool(os.environ.get(_ENV_JWT_SECRET)),
-    }
+    # 創建一個新的字典來避免直接修改 _CONFIG
+    snapshot = {k: v for k, v in _CONFIG.items() if k not in ["users", "codes"]} # 避免過多敏感數據
+    snapshot["users"] = [{"username": u["username"], "id": u.get("id")} for u in _CONFIG.get("users", []) if isinstance(u, dict)] # 僅返回部分用戶信息
+    snapshot["codes"] = [{"code": c["code"], "expires_at": c.get("expires_at")} for c in _CONFIG.get("codes", []) if isinstance(c, dict)] # 僅返回部分授權碼信息
+    snapshot["config_path"] = _effective_config_path()
+    snapshot["jwt_secret_from_env"] = bool(os.environ.get(_ENV_JWT_SECRET))
+    return snapshot
 
 
 def check_user_permission(user_groups: List[str], required_permission: str) -> bool:
@@ -440,35 +417,28 @@ def check_user_permission(user_groups: List[str], required_permission: str) -> b
     - user_groups: 用戶的身分組列表
     - required_permission: 需要的權限
     """
-    # 讀取身分組配置
-    groups_file = str(global_data.GROUPS_FILE)
-    try:
-        with open(groups_file, "r", encoding="utf-8") as f:
-            groups_config = json.load(f)
-    except:
-        groups_config = {"groups": {}}
+    # 從全局配置中獲取身分組數據
+    groups_config = _CONFIG.get("groups", {})
     
     # 收集用戶所有權限
     user_permissions = set()
     
     # 從身分組獲取權限
     for group_id in user_groups:
-        group_data = groups_config.get("groups", {}).get(group_id, {})
+        group_data = groups_config.get(group_id, {})
         if isinstance(group_data, dict) and "permissions" in group_data:
             for perm in group_data["permissions"]:
                 user_permissions.add(perm)
     
     # 檢查權限
     def _check_permission(req_perm: str) -> bool:
-        # 直接匹配
         if req_perm in user_permissions:
             return True
         
-        # 通配符匹配 (例如: user:*)
         if req_perm.endswith(":*"):
-            prefix = req_perm[:-2]  # 移除 ":*"
+            prefix = req_perm[:-2]
             for perm in user_permissions:
-                if perm.startswith(prefix + ":"):
+                if perm.startswith(prefix + ":") and len(perm) > len(prefix) + 1:
                     return True
         
         return False
@@ -477,18 +447,27 @@ def check_user_permission(user_groups: List[str], required_permission: str) -> b
 
 
 def _save_auth_config(config: Dict[str, Any]) -> None:
-    """保存认证配置"""
+    """保存認證配置"""
     path = _effective_config_path()
     try:
-        # 创建备份
+        # 創建備份
         if os.path.exists(path):
             backup_path = path + ".bak"
             import shutil
             shutil.copy2(path, backup_path)
+            logger.debug(f"_save_auth_config: 創建備份文件: {backup_path}")
 
-        # 保存新配置
+
+        # 保存新配置 (這裡直接保存傳入的 config 字典)
         with open(path, "w", encoding="utf-8") as f:
-            json.dump(config, f, ensure_ascii=False, indent=2)
+            json.dump(config, f, ensure_ascii=True, indent=2) # 確保 ASCII，因為這是配置文件
+            f.write("\n")
+        logger.info(f"_save_auth_config: 認證配置已保存到 {path}")
+        
+        # 更新 global_data 中的 AUTH_CONFIG，保持一致性
+        global_data.load_auth_config()
+        logger.info(f"_save_auth_config: global_data.AUTH_CONFIG 已重新加載: {global_data.AUTH_CONFIG.get('users', [])[:1]}...")
+
     except Exception as e:
-        logger.error(f"保存认证配置失败: {e}")
-        raise Exception(f"保存认证配置失败: {str(e)}")
+        logger.error(f"保存認證配置失敗: {e}")
+        raise Exception(f"保存認證配置失敗: {str(e)}")

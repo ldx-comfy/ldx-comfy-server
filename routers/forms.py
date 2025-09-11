@@ -13,7 +13,7 @@ from comfy.plugins import plugin_manager
 from comfy.get_wfs import get_wf_list, get_wf_params, get_wf, _wf_files_dir
 from starlette.concurrency import run_in_threadpool
 import global_data
-from routers.auth import get_current_identity, require_roles
+from auth.permissions import get_current_identity, require_permissions # 更改導入
 from history import save_generation_history, get_all_generation_history, process_image_paths
 from history import get_user_generation_history as get_user_history
 
@@ -35,49 +35,49 @@ class WorkflowExecutionResponse(BaseModel):
 
 
 @router.get("/workflows", response_model=List[str])
-async def get_available_workflows(identity: Dict[str, Any] = Depends(get_current_identity)):
-    """获取可用工作流列表"""
-    logging.info("开始获取可用工作流列表")
+async def get_available_workflows(identity: Dict[str, Any] = Depends(require_permissions(["workflow:read:*"]))): # 修改為新的細粒度權限
+    """獲取可用工作流列表"""
+    logging.info("開始獲取可用工作流列表")
     try:
         workflows = get_wf_list()
-        logging.info(f"成功获取 {len(workflows)} 个工作流")
+        logging.info(f"成功獲取 {len(workflows)} 個工作流")
         return workflows
     except Exception as e:
-        logging.error(f"获取可用工作流列表失败: {str(e)}")
+        logging.error(f"獲取可用工作流列表失敗: {str(e)}")
         raise
 
 
 @router.get("/user/workflows", response_model=List[str])
-async def get_user_workflows(identity: Dict[str, Any] = Depends(get_current_identity)):
-    """获取当前用户可用的工作流列表"""
-    logging.info("开始获取当前用户可用的工作流列表")
+async def get_user_workflows(identity: Dict[str, Any] = Depends(require_permissions(["workflow:read:*"]))): # 暫定為此權限，以便和 get_available_workflows 一致
+    """獲取当前用戶可用的工作流列表"""
+    logging.info("開始獲取當前用戶可用的工作流列表")
     try:
         workflows = get_wf_list()
-        logging.info(f"成功获取 {len(workflows)} 个工作流")
+        logging.info(f"成功獲取 {len(workflows)} 個工作流")
         return workflows
     except Exception as e:
-        logging.error(f"获取当前用户可用的工作流列表失败: {str(e)}")
+        logging.error(f"獲取當前用戶可用的工作流列表失敗: {str(e)}")
         raise
 
 
 @router.get("/workflows/{workflow_id}/form-schema")
-async def get_workflow_form_schema(workflow_id: str):
-    """获取工作流表单模式"""
-    logging.info(f"开始获取工作流 '{workflow_id}' 的表单模式")
+async def get_workflow_form_schema(workflow_id: str, identity: Dict[str, Any] = Depends(require_permissions(["workflow:read:*"]))): # 添加權限檢查
+    """獲取工作流表單模式"""
+    logging.info(f"開始獲取工作流 '{workflow_id}' 的表單模式")
     try:
-        logging.debug(f"获取工作流 '{workflow_id}' 的参数")
+        logging.debug(f"獲取工作流 '{workflow_id}' 的參數")
         params = get_wf_params(workflow_id)
-        logging.debug(f"获取工作流 '{workflow_id}' 的数据")
+        logging.debug(f"獲取工作流 '{workflow_id}' 的數據")
         workflow_data = get_wf(workflow_id)
 
-        # 构建表单模式
+        # 構建表單模式
         form_schema = {
             "workflow_id": workflow_id,
             "title": f"工作流: {workflow_id}",
             "fields": []
         }
 
-        logging.debug(f"为工作流 '{workflow_id}' 构建表单模式，参数数量: {len(params)}")
+        logging.debug(f"為工作流 '{workflow_id}' 構建表單模式，參數數量: {len(params)}")
         for param in params:
             field = {
                 "node_id": param["node_id"],
@@ -87,34 +87,34 @@ async def get_workflow_form_schema(workflow_id: str):
                 "required": True
             }
             form_schema["fields"].append(field)
-            logging.debug(f"添加字段: {field['title']} (类型: {field['type']})")
+            logging.debug(f"添加字段: {field['title']} (類型: {field['type']})")
 
-        logging.info(f"成功构建工作流 '{workflow_id}' 的表单模式，字段数量: {len(form_schema['fields'])}")
+        logging.info(f"成功構建工作流 '{workflow_id}' 的表單模式，字段數量: {len(form_schema['fields'])}")
         return form_schema
 
     except Exception as e:
-        logging.error(f"获取工作流 '{workflow_id}' 表单模式失败: {str(e)}")
-        raise HTTPException(status_code=404, detail=f"获取工作流 '{workflow_id}' 表单模式失败: {str(e)}")
+        logging.error(f"獲取工作流 '{workflow_id}' 表單模式失敗: {str(e)}")
+        raise HTTPException(status_code=404, detail=f"獲取工作流 '{workflow_id}' 表單模式失敗: {str(e)}")
 
 
 @router.post("/workflows/{workflow_id}/execute", response_model=WorkflowExecutionResponse)
 async def execute_workflow_with_form(
     workflow_id: str,
-    nodes: str = Form(..., description="节点数据，格式: [{node},{node}, ...]"),
+    nodes: str = Form(..., description="节点數據，格式: [{node},{node}, ...]"),
     files: Optional[List[UploadFile]] = File(None),
-    identity: Dict[str, Any] = Depends(get_current_identity)
+    identity: Dict[str, Any] = Depends(require_permissions(["workflow:execute:*"])) # 修改為新的細粒度權限
 ):
-    """通过表单执行工作流"""
-    logging.info(f"开始通过表单执行工作流 '{workflow_id}'")
+    """通過表單執行工作流"""
+    logging.info(f"開始通過表單執行工作流 '{workflow_id}'")
     try:
-        # 获取工作流数据
-        logging.debug(f"获取工作流 '{workflow_id}' 的数据")
+        # 獲取工作流數據
+        logging.debug(f"獲取工作流 '{workflow_id}' 的數據")
         workflow_data = get_wf(workflow_id)
 
-        # 解析节点数据
-        logging.debug("解析节点数据")
+        # 解析節點數據
+        logging.debug("解析節點數據")
         nodes_data = json.loads(nodes)
-        logging.debug(f"解析到 {len(nodes_data)} 个节点")
+        logging.debug(f"解析到 {len(nodes_data)} 個節點")
 
         # 处理上传的文件，将其保存到服务器并构建名称到路径的映射
         saved_files_by_name: Dict[str, str] = {}
@@ -240,9 +240,9 @@ async def execute_workflow_with_form(
 
 
 @router.get("/user/history", response_model=List[Dict[str, Any]])
-async def get_user_generation_history(identity: Dict[str, Any] = Depends(get_current_identity)):
-    """获取当前用户的生成历史记录"""
-    logging.info("开始获取当前用户的生成历史记录")
+async def get_user_generation_history(identity: Dict[str, Any] = Depends(require_permissions(["history:read:self"]))): # 修改為新的細粒度權限
+    """獲取當前用戶的生成歷史記錄"""
+    logging.info("開始獲取當前用戶的生成歷史記錄")
     try:
         user_id = identity.get("sub", "unknown_user")
         history = await get_user_history(user_id)
@@ -250,24 +250,24 @@ async def get_user_generation_history(identity: Dict[str, Any] = Depends(get_cur
         processed_history = process_image_paths(history)
         # 转换为base64格式供前端使用
         frontend_history = _convert_images_to_base64_for_frontend(processed_history)
-        logging.info(f"成功获取用户 {user_id} 的生成历史记录，共 {len(frontend_history)} 条")
+        logging.info(f"成功獲取用戶 {user_id} 的生成歷史記錄，共 {len(frontend_history)} 條")
         return frontend_history
     except Exception as e:
-        logging.error(f"获取当前用户的生成历史记录失败: {str(e)}")
+        logging.error(f"獲取當前用戶的生成歷史記錄失敗: {str(e)}")
         raise
 
 
 @router.get("/user/history/{execution_id}", response_model=Dict[str, Any])
-async def get_user_generation_history_detail(execution_id: str, identity: Dict[str, Any] = Depends(get_current_identity)):
-    """获取当前用户特定执行ID的生成历史记录详情"""
-    logging.info(f"开始获取执行ID '{execution_id}' 的生成历史记录详情")
+async def get_user_generation_history_detail(execution_id: str, identity: Dict[str, Any] = Depends(require_permissions(["history:read:self"]))): # 修改為新的細粒度權限
+    """獲取當前用戶特定執行ID的生成歷史記錄詳情"""
+    logging.info(f"開始獲取執行ID '{execution_id}' 的生成歷史記錄詳情")
     try:
         user_id = identity.get("sub", "unknown_user")
         history = await get_user_history(user_id)
         # 處理圖片路徑以避免重複前綴
         processed_history = process_image_paths(history)
 
-        # 查找匹配的记录
+        # 查找匹配的記錄
         record = None
         for item in processed_history:
             if item.get("execution_id") == execution_id:
@@ -275,48 +275,48 @@ async def get_user_generation_history_detail(execution_id: str, identity: Dict[s
                 break
 
         if record is None:
-            logging.warning(f"未找到执行ID '{execution_id}' 的生成历史记录")
-            raise HTTPException(status_code=404, detail=f"未找到执行ID '{execution_id}' 的生成历史记录")
+            logging.warning(f"未找到執行ID '{execution_id}' 的生成歷史記錄")
+            raise HTTPException(status_code=404, detail=f"未找到執行ID '{execution_id}' 的生成歷史記錄")
 
         # 转换为base64格式供前端使用
         frontend_record = _convert_images_to_base64_for_frontend([record])[0]
-        logging.info(f"成功获取执行ID '{execution_id}' 的生成历史记录详情")
+        logging.info(f"成功獲取執行ID '{execution_id}' 的生成歷史記錄詳情")
         return frontend_record
     except HTTPException:
-        # 重新抛出HTTP异常
+        # 重新抛出HTTP異常
         raise
     except Exception as e:
-        logging.error(f"获取执行ID '{execution_id}' 的生成历史记录详情失败: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"获取生成历史记录详情失败: {str(e)}")
+        logging.error(f"獲取執行ID '{execution_id}' 的生成歷史記錄詳情失敗: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"獲取生成歷史記錄詳情失敗: {str(e)}")
 
 
 @router.get("/admin/history", response_model=List[Dict[str, Any]])
-async def get_all_users_generation_history(identity: Dict[str, Any] = Depends(require_roles(["admin"]))):
-    """获取所有用户的生成历史记录（仅限管理员）"""
-    logging.info("管理员开始获取所有用户的生成历史记录")
+async def get_all_users_generation_history(identity: Dict[str, Any] = Depends(require_permissions(["admin:history:read"]))): # 修改為新的細粒度權限
+    """獲取所有用戶的生成歷史記錄（僅限管理員）"""
+    logging.info("管理員開始獲取所有用戶的生成歷史記錄")
     try:
         history = get_all_generation_history()
         # 處理圖片路徑以避免重複前綴
         processed_history = process_image_paths(history)
         # 转换为base64格式供前端使用
         frontend_history = _convert_images_to_base64_for_frontend(processed_history)
-        logging.info(f"管理员成功获取所有用户的生成历史记录，共 {len(frontend_history)} 条")
+        logging.info(f"管理員成功獲取所有用戶的生成歷史記錄，共 {len(frontend_history)} 條")
         return frontend_history
     except Exception as e:
-        logging.error(f"管理员获取所有用户的生成历史记录失败: {str(e)}")
+        logging.error(f"管理員獲取所有用戶的生成歷史記錄失敗: {str(e)}")
         raise
 
 
 @router.get("/admin/history/{execution_id}", response_model=Dict[str, Any])
-async def get_any_user_generation_history_detail(execution_id: str, identity: Dict[str, Any] = Depends(require_roles(["admin"]))):
-    """获取任意用户特定执行ID的生成历史记录详情（仅限管理员）"""
-    logging.info(f"管理员开始获取执行ID '{execution_id}' 的生成历史记录详情")
+async def get_any_user_generation_history_detail(execution_id: str, identity: Dict[str, Any] = Depends(require_permissions(["admin:history:read"]))): # 修改為新的細粒度權限
+    """獲取任意用戶特定執行ID的生成歷史記錄詳情（僅限管理員）"""
+    logging.info(f"管理員開始獲取執行ID '{execution_id}' 的生成歷史記錄詳情")
     try:
         history = get_all_generation_history()
         # 處理圖片路徑以避免重複前綴
         processed_history = process_image_paths(history)
 
-        # 查找匹配的记录
+        # 查找匹配的記錄
         record = None
         for item in processed_history:
             if item.get("execution_id") == execution_id:
@@ -324,19 +324,19 @@ async def get_any_user_generation_history_detail(execution_id: str, identity: Di
                 break
 
         if record is None:
-            logging.warning(f"未找到执行ID '{execution_id}' 的生成历史记录")
-            raise HTTPException(status_code=404, detail=f"未找到执行ID '{execution_id}' 的生成历史记录")
+            logging.warning(f"未找到執行ID '{execution_id}' 的生成歷史記錄")
+            raise HTTPException(status_code=404, detail=f"未找到執行ID '{execution_id}' 的生成歷史記錄")
 
         # 转换为base64格式供前端使用
         frontend_record = _convert_images_to_base64_for_frontend([record])[0]
-        logging.info(f"管理员成功获取执行ID '{execution_id}' 的生成历史记录详情")
+        logging.info(f"管理員成功獲取執行ID '{execution_id}' 的生成歷史記錄詳情")
         return frontend_record
     except HTTPException:
-        # 重新抛出HTTP异常
+        # 重新抛出HTTP異常
         raise
     except Exception as e:
-        logging.error(f"管理员获取执行ID '{execution_id}' 的生成历史记录详情失败: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"获取生成历史记录详情失败: {str(e)}")
+        logging.error(f"管理員獲取執行ID '{execution_id}' 的生成歷史記錄詳情失敗: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"獲取生成歷史記錄詳情失敗: {str(e)}")
 
 
 @router.get("/executions/{execution_id}/status", response_model=WorkflowExecutionResponse)
@@ -521,61 +521,61 @@ def _get_field_type(class_type: str) -> str:
 @router.post("/workflows/upload")
 async def upload_workflow(
     file: UploadFile = File(...),
-    identity: Dict[str, Any] = Depends(require_roles(["admin"]))
+    identity: Dict[str, Any] = Depends(require_permissions(["admin:workflows:manage"])) # 修改為新的細粒度權限
 ):
-    """上传工作流文件"""
-    logging.info(f"开始上传工作流文件: {file.filename}")
+    """上傳工作流文件"""
+    logging.info(f"開始上傳工作流文件: {file.filename}")
     try:
-        # 检查文件扩展名
+        # 檢查文件擴展名
         if not file.filename or not file.filename.endswith('.json'):
-            raise HTTPException(status_code=400, detail="只允许上传 JSON 文件")
+            raise HTTPException(status_code=400, detail="只允許上傳 JSON 文件")
         
-        # 读取文件内容
+        # 讀取文件內容
         content = await file.read()
         
-        # 验证 JSON 格式
+        # 驗證 JSON 格式
         try:
             workflow_data = json.loads(content)
         except json.JSONDecodeError as e:
-            raise HTTPException(status_code=400, detail=f"无效的 JSON 格式: {str(e)}")
+            raise HTTPException(status_code=400, detail=f"無效的 JSON 格式: {str(e)}")
         
-        # 获取工作流 ID（文件名不带扩展名）
-        workflow_id = file.filename[:-5]  # 去掉 .json 扩展名
+        # 獲取工作流 ID（檔名不帶擴展名）
+        workflow_id = file.filename[:-5]  # 去掉 .json 擴展名
         
-        # 构建保存路径
+        # 構建保存路徑
         save_path = os.path.join(_wf_files_dir, file.filename)
         
         # 保存文件
         with open(save_path, "wb") as f:
             f.write(content)
         
-        logging.info(f"工作流文件 '{workflow_id}' 上传成功")
-        return {"message": f"工作流 '{workflow_id}' 上传成功", "workflow_id": workflow_id}
+        logging.info(f"工作流文件 '{workflow_id}' 上傳成功")
+        return {"message": f"工作流 '{workflow_id}' 上傳成功", "workflow_id": workflow_id}
     except Exception as e:
-        logging.error(f"上传工作流文件失败: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"上传工作流文件失败: {str(e)}")
+        logging.error(f"上傳工作流文件失敗: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"上傳工作流文件失敗: {str(e)}")
 
 
 @router.delete("/workflows/{workflow_id}")
 async def delete_workflow(
     workflow_id: str,
-    identity: Dict[str, Any] = Depends(require_roles(["admin"]))
+    identity: Dict[str, Any] = Depends(require_permissions(["admin:workflows:manage"])) # 修改為新的細粒度權限
 ):
-    """删除工作流文件"""
-    logging.info(f"开始删除工作流: {workflow_id}")
+    """刪除工作流文件"""
+    logging.info(f"開始刪除工作流: {workflow_id}")
     try:
-        # 构建文件路径
+        # 構建文件路徑
         file_path = os.path.join(_wf_files_dir, f"{workflow_id}.json")
         
-        # 检查文件是否存在
+        # 檢查文件是否存在
         if not os.path.exists(file_path):
             raise HTTPException(status_code=404, detail=f"工作流 '{workflow_id}' 不存在")
         
-        # 删除文件
+        # 刪除文件
         os.remove(file_path)
         
-        logging.info(f"工作流 '{workflow_id}' 删除成功")
-        return {"message": f"工作流 '{workflow_id}' 删除成功"}
+        logging.info(f"工作流 '{workflow_id}' 刪除成功")
+        return {"message": f"工作流 '{workflow_id}' 刪除成功"}
     except Exception as e:
-        logging.error(f"删除工作流失败: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"删除工作流失败: {str(e)}")
+        logging.error(f"刪除工作流失敗: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"刪除工作流失敗: {str(e)}")

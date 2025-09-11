@@ -5,219 +5,147 @@
 from fastapi import Request, HTTPException, status
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
-from typing import Dict, Any, Callable, Awaitable
+from typing import Dict, Any, Callable, Awaitable, List, Optional
 import logging
-from auth.permissions import get_current_identity
-from auth.config import _load_json_file
+from auth.permissions import get_current_identity # 這裡保留這個導入，只用於解析 JWT
 import auth.config as auth_config
 import global_data
-import json
+import re
 
 logger = logging.getLogger(__name__)
 
 class AuthMiddleware(BaseHTTPMiddleware):
     def __init__(self, app):
         super().__init__(app)
-        # 定義需要權限驗證的路由模式
-        self.protected_routes = {
-            "/api/v1/forms/workflows": ["user:read"],
-            "/api/v1/forms/user/workflows": ["user:read"],
-            "/api/v1/forms/workflows/[^/]+/form-schema": ["user:read"],
-            "/api/v1/forms/workflows/[^/]+/execute": ["user:execute"],
-            # 可以根據需要添加更多路由
+        # 統一後端路由的權限映射表 (更精確的模式匹配)
+        self.route_permissions_map = {
+            # 用戶管理
+            re.compile(r"^/api/v1/admin/users/?$"): {"GET": ["admin:users:read"], "POST": ["admin:users:manage"]},
+            re.compile(r"^/api/v1/admin/users/[^/]+/role/?$"): {"PUT": ["admin:users:manage"]},
+            re.compile(r"^/api/v1/admin/users/[^/]+/status/?$"): {"PUT": ["admin:users:manage"]},
+            re.compile(r"^/api/v1/admin/users/[^/]+/groups/?$"): {"PUT": ["admin:users:manage"]},
+            re.compile(r"^/api/v1/admin/users/[^/]+/reset-password/?$"): {"PUT": ["admin:users:manage"]},
+            re.compile(r"^/api/v1/admin/users/[^/]+/?$"): {"DELETE": ["admin:users:manage"]}, # 刪除用戶
+
+            # 身分組管理
+            re.compile(r"^/api/v1/admin/groups/?$"): {"GET": ["admin:groups:read"], "POST": ["admin:groups:manage"]},
+            re.compile(r"^/api/v1/admin/groups/[^/]+/?$"): {"GET": ["admin:groups:read"], "PUT": ["admin:groups:manage"], "DELETE": ["admin:groups:manage"]},
+            re.compile(r"^/api/v1/admin/groups/permissions/list/?$"): {"GET": ["admin:groups:read"]},
+            re.compile(r"^/api/v1/admin/groups/my/permissions/?$"): {"GET": []}, # 用戶獲取自己的權限，只需要身份驗證，不需要特定 admin 權限
+
+            # 工作流管理 (Admin 視圖)
+            re.compile(r"^/api/v1/forms/admin/history/?$"): {"GET": ["admin:history:read"]},
+            re.compile(r"^/api/v1/forms/admin/history/[^/]+/?$"): {"GET": ["admin:history:read"]},
+            re.compile(r"^/api/v1/forms/workflows/upload/?$"): {"POST": ["admin:workflows:manage"]},
+            re.compile(r"^/api/v1/forms/workflows/[^/]+/?$"): {"DELETE": ["admin:workflows:manage"]}, # 刪除工作流
+
+            # 授權碼管理
+            re.compile(r"^/api/v1/auth/admin/codes/?$"): {"GET": ["admin:codes:read"], "POST": ["admin:codes:manage"]},
+            re.compile(r"^/api/v1/auth/admin/codes/[^/]+/?$"): {"DELETE": ["admin:codes:manage"]},
+
+            # 普通用戶功能 (需要身份驗證)
+            re.compile(r"^/api/v1/forms/workflows/?$"): {"GET": ["workflow:read:*"]},
+            re.compile(r"^/api/v1/forms/user/workflows/?$"): {"GET" : ["workflow:read:*"]},
+            re.compile(r"^/api/v1/forms/workflows/[^/]+/form-schema/?$"): {"GET": ["workflow:read:*"]},
+            re.compile(r"^/api/v1/forms/workflows/[^/]+/execute/?$"): {"POST": ["workflow:execute:*"]},
+            re.compile(r"^/api/v1/forms/user/history/?$"): {"GET": ["history:read:self"]},
+            re.compile(r"^/api/v1/forms/user/history/[^/]+/?$"): {"GET": ["history:read:self"]},
+            re.compile(r"^/api/v1/auth/me/reset-password/?$"): {"PUT": ["user:reset_password:self"]},
+
+            # 公開路由 (不需要任何認證)
+            re.compile(r"^/api/v1/auth/login/?$"): {},
+            re.compile(r"^/api/v1/auth/code/?$"): {},
+            re.compile(r"^/api/v1/auth/me/?$"): {}, # 獲取自身信息，由 get_current_identity 處理 (即使沒有 token 也不會 401)
+            re.compile(r"^/api/v1/health.*$"): {},
+            re.compile(r"^/api/v1/admin/ping/?$"): {"GET": ["admin:access"]}, # 管理員 ping 應該是 admin:access
         }
-        
+
     async def dispatch(self, request: Request, call_next: Callable[[Request], Awaitable[Any]]):
-        # 檢查是否需要權限驗證
-        if self._is_protected_route(request):
-            logger.info(f"路由 {request.url.path} 需要權限驗證")
+        path = request.url.path
+        method = request.method
+
+        logger.debug(f"AuthMiddleware: 收到請求: {method} {path}")
+
+        identity: Optional[Dict[str, Any]] = None
+        authorization = request.headers.get("Authorization")
+        if authorization:
             try:
-                # 驗證身份
-                identity = await self._verify_identity(request)
-                logger.info(f"用戶身份驗證成功: {identity.get('sub', 'unknown')}")
-                # 檢查權限
-                if not await self._check_permissions(request, identity):
-                    logger.warning(f"用戶 {identity.get('sub', 'unknown')} 權限不足")
-                    return JSONResponse(
-                        status_code=status.HTTP_403_FORBIDDEN,
-                        content={"detail": "權限不足"}
-                    )
+                # 使用 get_current_identity 嘗試解析 JWT
+                identity = get_current_identity(authorization)
+                request.state.identity = identity # 將身份信息存在 request.state 以便後續路由或依賴使用
+                logger.debug(f"AuthMiddleware: 用戶身份已加載: {identity.get('sub', 'unknown')}")
             except HTTPException as e:
-                logger.warning(f"HTTP異常: {e.status_code} - {e.detail}")
-                return JSONResponse(
-                    status_code=e.status_code,
-                    content={"detail": e.detail}
-                )
+                # 即使身份驗證失敗 (例如無效令牌)，也記錄並允許請求繼續，
+                # 讓需要身份或權限的路由自行返回 401/403
+                logger.debug(f"AuthMiddleware: 身份令牌無效, 錯誤: {e.detail}")
             except Exception as e:
-                logger.error(f"權限驗證錯誤: {str(e)}")
-                return JSONResponse(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    content={"detail": "內部服務器錯誤"}
-                )
+                logger.warning(f"AuthMiddleware: 身份解析出錯: {str(e)}")
+
+        required_permissions = self._get_required_permissions_for_route(path, method)
+
+        if required_permissions is not None:
+            if required_permissions: # 如果有明確的權限要求 (列表非空)
+                if not identity:
+                    logger.warning(f"AuthMiddleware: 路由 {method} {path} 需要身份驗證，但未提供")
+                    return JSONResponse(status_code=status.HTTP_401_UNAUTHORIZED, content={"detail": "需要身份驗證"})
+                
+                # 檢查用戶是否具有所需權限
+                if not self._check_user_has_permissions(identity, required_permissions):
+                    logger.warning(f"AuthMiddleware: 用戶 {identity.get('sub', 'unknown')} 權限不足以訪問 {method} {path}")
+                    return JSONResponse(status_code=status.HTTP_403_FORBIDDEN, content={"detail": "權限不足"})
+                logger.debug(f"AuthMiddleware: 用戶 {identity.get('sub', 'unknown')} 通過權限檢查以訪問 {method} {path}")
+            else: # required_permissions 為空列表，表示需要身份驗證但無特定權限
+                if not identity:
+                    logger.warning(f"AuthMiddleware: 路由 {method} {path} 需要身份驗證，但未提供")
+                    return JSONResponse(status_code=status.HTTP_401_UNAUTHORIZED, content={"detail": "需要身份驗證"})
+                logger.debug(f"AuthMiddleware: 路由 {method} {path} 需要身份驗證 (無特定權限)，用戶已通過")
         else:
-            logger.info(f"路由 {request.url.path} 不需要權限驗證")
-        
-        # 繼續處理請求
+            # 路由未在映射中定義，視為公共可訪問 (不進行認證/授權檢查)
+            logger.debug(f"AuthMiddleware: 路由 {method} {path} 未在權限映射中定義，視為公共路由 (跳過身份/權限檢查)")
+
         response = await call_next(request)
         return response
-    
-    def _is_protected_route(self, request: Request) -> bool:
-        """檢查是否為受保護的路由"""
-        path = request.url.path
-        method = request.method
-        
-        # 保護所有以 /api/v1/admin/ 開頭的路由
-        if path.startswith("/api/v1/admin/"):
+
+    def _get_required_permissions_for_route(self, path: str, method: str) -> Optional[List[str]]:
+        """
+        根據路徑和方法獲取此路由所需的權限列表。
+        返回 None 表示路由未在 map 中定義。
+        返回空列表 [] 表示路由需要身份驗證但不需要特定權限 (例如某些用戶個人信息接口)。
+        """
+        for pattern, method_perms in self.route_permissions_map.items():
+            if pattern.fullmatch(path):
+                return method_perms.get(method)
+        return None # 未在 map 中找到匹配的路由
+
+    def _check_user_has_permissions(self, identity: Dict[str, Any], required_permissions: List[str]) -> bool:
+        """
+        檢查用戶是否具有所需權限。
+        支持通配符權限 (例如，如果 required 是 workflow:read:*, 用戶有 workflow:read:specific)
+        """
+        user_permissions = identity.get("permissions", []) # JWT 中應該已經包含了所有處理後的細粒度權限
+        if not isinstance(user_permissions, list):
+            user_permissions = []
+        user_permissions_set = set(user_permissions)
+
+        if not required_permissions: # 如果 required_permissions 為空列表，表示只需要身份驗證，不需要特定權限
             return True
+
+        #檢查是否含有任一權限
+        any_permission_satisfied = False
+        for req_perm in required_permissions:
+            # 直接匹配 (例如，required: admin:users:read, user_permissions: {"admin:users:read"})
+            if req_perm in user_permissions_set:
+                any_permission_satisfied = True
+                break
             
-        # 保護所有以 /api/v1/forms/workflows 開頭的路由
-        if path.startswith("/api/v1/forms/workflows"):
-            return True
-            
-        return False
-    
-    async def _verify_identity(self, request: Request) -> Dict[str, Any]:
-        """驗證用戶身份"""
-        # 從請求頭中獲取授權信息
-        authorization = request.headers.get("Authorization")
+            # 通配符匹配 (例如，required: admin:users:read, user_permissions: {"admin:users:*"})
+            for user_perm_with_wildcard in user_permissions_set:
+                if user_perm_with_wildcard.endswith(":*"):
+                    wildcard_prefix = user_perm_with_wildcard[:-2] + ":"
+                    if req_perm.startswith(wildcard_prefix):
+                        any_permission_satisfied = True
+                        break
+            if any_permission_satisfied:
+                break
         
-        # 使用與路由依賴相同的驗證邏輯
-        from auth.permissions import get_current_identity
-        try:
-            identity = get_current_identity(authorization)
-            return identity
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.error(f"身份驗證錯誤: {str(e)}")
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="無效的授權信息"
-            )
-    
-    async def _check_permissions(self, request: Request, identity: Dict[str, Any]) -> bool:
-        """檢查用戶權限"""
-        path = request.url.path
-        method = request.method
-        logger.info(f"檢查權限: {method} {path}")
-        
-        # 獲取用戶的權限
-        user_permissions = await self._get_user_permissions(identity)
-        
-        # 檢查路由所需的權限
-        required_permissions = self._get_required_permissions(path, method)
-        logger.info(f"路由 {method} {path} 所需權限: {required_permissions}")
-        
-        # 檢查用戶是否具有所需權限
-        for perm in required_permissions:
-            if not self._has_permission(user_permissions, perm):
-                logger.warning(f"用戶缺少權限: {perm}")
-                return False
-            else:
-                logger.info(f"用戶具有權限: {perm}")
-                
-        logger.info(f"用戶具有訪問 {method} {path} 的所有必要權限")
-        return True
-    
-    async def _get_user_permissions(self, identity: Dict[str, Any]) -> set:
-        """獲取用戶權限集合"""
-        logger.info(f"獲取用戶權限，身份信息: {identity}")
-        
-        # 從身分組配置中獲取用戶權限
-        try:
-            with open(str(global_data.GROUPS_FILE), "r", encoding="utf-8") as f:
-                groups_config = json.load(f)
-            logger.info("成功加載身分組配置")
-        except Exception as e:
-            logger.error(f"加載身分組配置失敗: {e}")
-            groups_config = {"groups": {}}
-        
-        # 從認證配置中獲取組映射
-        try:
-            auth_config_data = _load_json_file(auth_config._effective_config_path())
-            groups_map = auth_config_data.get("groups_map", {}) if auth_config_data else {}
-            logger.info(f"組映射: {groups_map}")
-        except Exception as e:
-            logger.error(f"獲取組映射失敗: {e}")
-            groups_map = {}
-        
-        # 獲取用戶的身分組
-        user_groups = identity.get("groups", [])
-        if not isinstance(user_groups, list):
-            user_groups = []
-        logger.info(f"用戶的身分組: {user_groups}")
-        
-        # 獲取用戶的角色
-        user_roles = identity.get("roles", [])
-        if not isinstance(user_roles, list):
-            user_roles = []
-        logger.info(f"用戶的角色: {user_roles}")
-        
-        # 將角色映射到組
-        for role in user_roles:
-            if role in groups_map:
-                mapped_groups = groups_map[role]
-                if isinstance(mapped_groups, list):
-                    for group in mapped_groups:
-                        if group not in user_groups:
-                            user_groups.append(group)
-        logger.info(f"映射後的用戶身分組: {user_groups}")
-        
-        # 收集用戶所有權限
-        user_permissions = set()
-        
-        # 從身分組獲取權限
-        for group_id in user_groups:
-            group_data = groups_config.get("groups", {}).get(group_id, {})
-            if isinstance(group_data, dict) and "permissions" in group_data:
-                for perm in group_data["permissions"]:
-                    user_permissions.add(perm)
-        logger.info(f"用戶的權限: {user_permissions}")
-                
-        return user_permissions
-    
-    def _get_required_permissions(self, path: str, method: str) -> list:
-        """獲取路由所需的權限"""
-        # 保護所有以 /api/v1/admin/ 開頭的路由，需要管理員權限
-        if path.startswith("/api/v1/admin/"):
-            return ["user:*", "group:*", "workflow:*", "history:*"]
-        
-        # 保護所有以 /api/v1/forms/workflows 開頭的路由
-        if path.startswith("/api/v1/forms/workflows"):
-            if method in ["POST", "PUT", "DELETE"]:
-                return ["workflow:write"]
-            else:
-                return ["workflow:read"]
-        
-        return []
-    
-    def _has_permission(self, user_permissions: set, required_permission: str) -> bool:
-        """檢查用戶是否具有指定權限"""
-        logger.info(f"檢查用戶是否具有權限: {required_permission}")
-        logger.info(f"用戶的權限集合: {user_permissions}")
-        
-        # 直接匹配
-        if required_permission in user_permissions:
-            logger.info(f"直接匹配成功: {required_permission}")
-            return True
-        
-        # 通配符匹配 (例如: user:*)
-        # 檢查用戶權限中的通配符是否匹配所需權限 (用戶有 workflow:*, 需要 workflow:read)
-        for user_perm in user_permissions:
-            if user_perm.endswith(":*"):
-                prefix = user_perm[:-2]  # 移除 ":*"
-                if required_permission.startswith(prefix + ":"):
-                    logger.info(f"通配符匹配成功: {user_perm} 匹配 {required_permission}")
-                    return True
-        
-        # 檢查所需權限中的通配符是否匹配用戶權限 (需要 user:*, 用戶有 user:read)
-        if required_permission.endswith(":*"):
-            prefix = required_permission[:-2]  # 移除 ":*"
-            logger.info(f"嘗試通配符匹配，前綴: {prefix}")
-            for perm in user_permissions:
-                if perm.startswith(prefix + ":"):
-                    logger.info(f"通配符匹配成功: {perm}")
-                    return True
-        
-        logger.info(f"權限匹配失敗: {required_permission}")
-        return False
+        return any_permission_satisfied

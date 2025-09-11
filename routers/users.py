@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
 from auth import config as auth_config
-from routers.auth import get_current_identity, require_roles
+from auth.permissions import get_current_identity, require_permissions # 更改導入
 import global_data
 
 router = APIRouter(prefix="/api/v1/admin/users", tags=["用户管理"])
@@ -73,38 +73,24 @@ class UpdateUserGroupsRequest(BaseModel):
 # 工具函数
 # ============================
 
-def _get_auth_config_path() -> str:
-    """获取认证配置文件路径"""
-    return auth_config._effective_config_path()
+# 由於現在全局配置統一管理，這些私有函數可以移除或簡化
+# 直接從 global_data.AUTH_CONFIG 獲取配置
+def _load_auth_config_from_global() -> Dict[str, Any]:
+    """從 global_data 加載認證配置"""
+    if not global_data.AUTH_CONFIG:
+        global_data.load_auth_config() # 嘗試重新加載
+    return global_data.AUTH_CONFIG
 
-
-def _load_auth_config() -> Dict[str, Any]:
-    """加载认证配置"""
-    path = _get_auth_config_path()
+def _save_auth_config_to_global(config: Dict[str, Any]) -> None:
+    """保存認證配置到 global_data 並持久化"""
     try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
+        # 直接更新 global_data 中的 AUTH_CONFIG
+        global_data.AUTH_CONFIG.update(config)
+        # 調用 auth_config 的保存函數來持久化
+        auth_config._save_auth_config(global_data.AUTH_CONFIG)
     except Exception as e:
-        logging.error(f"加载认证配置失败: {e}")
-        raise HTTPException(status_code=500, detail="加载认证配置失败")
-
-
-def _save_auth_config(config: Dict[str, Any]) -> None:
-    """保存认证配置"""
-    path = _get_auth_config_path()
-    try:
-        # 创建备份
-        if os.path.exists(path):
-            backup_path = path + ".bak"
-            import shutil
-            shutil.copy2(path, backup_path)
-
-        # 保存新配置
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(config, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        logging.error(f"保存认证配置失败: {e}")
-        raise HTTPException(status_code=500, detail="保存认证配置失败")
+        logging.error(f"保存認證配置失敗: {e}")
+        raise HTTPException(status_code=500, detail="保存認證配置失敗")
 
 
 def _find_user_index(config: Dict[str, Any], user_id: str) -> int:
@@ -126,7 +112,7 @@ def _find_user_index(config: Dict[str, Any], user_id: str) -> int:
 
 def _get_user_role_and_groups(user: Dict[str, Any]) -> tuple[str, List[str]]:
     """获取用户的角色和组"""
-    roles, groups = auth_config.resolve_effective_roles(user)
+    roles, groups, permissions = auth_config.resolve_effective_roles(user)
     # 取第一个角色作为主要角色，如果没有则默认为 'user'
     role = roles[0] if roles else 'user'
     return role, groups
@@ -168,11 +154,11 @@ def _get_user_created_at(user: Dict[str, Any]) -> str:
 # ============================
 
 @router.get("/", response_model=List[UserInfo])
-async def get_all_users(identity: Dict[str, Any] = Depends(require_roles(["admin"]))):
+async def get_all_users(identity: Dict[str, Any] = Depends(require_permissions(["admin:users:read"]))):
     """获取所有用户列表（仅管理员）"""
     logging.info("管理员获取所有用户列表")
     try:
-        config = _load_auth_config()
+        config = _load_auth_config_from_global()
         users = config.get("users", [])
 
         user_list = []
@@ -216,7 +202,7 @@ async def get_all_users(identity: Dict[str, Any] = Depends(require_roles(["admin
                 user_list.append(user_info)
 
         # 保存更新后的配置（添加了缺失的字段）
-        _save_auth_config(config)
+        _save_auth_config_to_global(config)
 
         logging.info(f"成功获取 {len(user_list)} 个用户")
         return user_list
@@ -224,193 +210,178 @@ async def get_all_users(identity: Dict[str, Any] = Depends(require_roles(["admin
     except Exception as e:
         logging.error(f"获取用户列表失败: {e}")
         raise HTTPException(status_code=500, detail=f"获取用户列表失败: {str(e)}")
-@router.put("/me/reset-password")
+@router.put("/me/reset-password") # 注意：這個路由應該在 /api/v1/users/me/reset-password，而不是 /api/v1/admin/users/me/reset-password
+
+# 移除 `require_roles(["admin"])` 因為這是用戶自己的操作，只需要認證
 async def reset_own_password_admin(
     request: ResetOwnPasswordAdminRequest,
-    identity: Dict[str, Any] = Depends(get_current_identity)
+    identity: Dict[str, Any] = Depends(get_current_identity) # 只依賴於 get_current_identity
 ):
-    """管理员在管理界面重置自己的密码（兼容前端 /admin/users/me/reset-password 调用）
-    仅需验证当前密码；如果未提供 new_password，则自动生成 16 位随机密码并返回给调用方。
-    """
+    """重置自己密码请求（任何已認證用戶）"""
     current_username = identity.get("sub")
-    logging.info(f"用户 {current_username} 在管理界面/我的页面重置自己的密码")
+    logging.info(f"用戶 {current_username} 重置自己的密碼")
     try:
-        # 验证新密码必须提供且长度>=6
         if not request.new_password or len(request.new_password) < 6:
-            raise HTTPException(status_code=400, detail="新密码长度至少为6位")
+            raise HTTPException(status_code=400, detail="新密碼長度至少為6位")
         new_pw = request.new_password
 
-        # 获取当前用户
-        if not current_username:
-            raise HTTPException(status_code=400, detail="无法识别当前用户")
+        if not current_username or not isinstance(current_username, str) or len(current_username.strip()) == 0:
+            raise HTTPException(status_code=400, detail="無效的用戶名或無法識別當前用戶")
 
-        # 验证用户名是否有效
-        if not isinstance(current_username, str) or len(current_username.strip()) == 0:
-            raise HTTPException(status_code=400, detail="无效的用户名")
-
-        config = _load_auth_config()
-        user_index = _find_user_index(config, current_username)
+        config = _load_auth_config_from_global()
+        users = config.get("users", [])
+        user_index = -1
+        for i, user in enumerate(users):
+            if isinstance(user, dict) and user.get("username") == current_username:
+                user_index = i
+                break
 
         if user_index == -1:
-            logging.warning(f"JWT token 包含不存在的用户名: {current_username}")
-            raise HTTPException(status_code=401, detail="认证令牌无效，请重新登录")
+            logging.warning(f"JWT token 包含不存在的用戶名: {current_username}")
+            raise HTTPException(status_code=401, detail="認證令牌無效，請重新登錄")
 
-        user = config["users"][user_index]
+        user = users[user_index]
 
-        # 验证当前密码（兼容明文与哈希）
         current_password_hash = user.get("password_hash")
         if not current_password_hash:
+            # 兼容：檢查明文密碼字段 (如果存在)
             current_password = user.get("password")
             if current_password is None or current_password != request.current_password:
-                raise HTTPException(status_code=400, detail="当前密码不正确")
+                raise HTTPException(status_code=400, detail="當前密碼不正確")
         else:
             if not auth_config.verify_password(request.current_password, current_password_hash):
-                raise HTTPException(status_code=400, detail="当前密码不正确")
+                raise HTTPException(status_code=400, detail="當前密碼不正確")
 
-        # 更新密码
         user["password_hash"] = auth_config.hash_password(new_pw)
+        _save_auth_config_to_global(config)
 
-        _save_auth_config(config)
-
-        logging.info(f"用户 {current_username} 密码重置成功")
-        return {"message": "密码已重置"}
+        logging.info(f"用戶 {current_username} 密碼重置成功")
+        return {"message": "密碼已重置"}
 
     except HTTPException:
         raise
     except Exception as e:
-        logging.error(f"管理员重置自己密码失败: {e}")
-        raise HTTPException(status_code=500, detail=f"管理员重置自己密码失败: {str(e)}")
+        logging.error(f"重置用戶密碼失敗: {e}")
+        raise HTTPException(status_code=500, detail=f"重置用戶密碼失敗: {str(e)}")
 
 
 @router.put("/{user_id}/role")
 async def update_user_role(
     user_id: str,
     request: UpdateUserRoleRequest,
-    identity: Dict[str, Any] = Depends(require_roles(["admin"]))
+    identity: Dict[str, Any] = Depends(require_permissions(["admin:users:manage"])) # 使用細粒度權限
 ):
     """更新用户角色（仅管理员）"""
-    logging.info(f"管理员更新用户 {user_id} 角色为 {request.role}")
+    logging.info(f"管理員更新用戶 {user_id} 角色為 {request.role}")
     try:
-        # 验证角色
         valid_roles = ["admin", "moderator", "user"]
         if request.role not in valid_roles:
-            raise HTTPException(status_code=400, detail=f"无效的角色: {request.role}")
+            raise HTTPException(status_code=400, detail=f"無效的角色: {request.role}")
 
-        # 验证用户名是否有效
         if not user_id or not isinstance(user_id, str) or len(user_id.strip()) == 0:
-            raise HTTPException(status_code=400, detail="无效的用户名")
+            raise HTTPException(status_code=400, detail="無效的用戶名")
 
-        config = _load_auth_config()
+        config = _load_auth_config_from_global()
+        users = config.get("users", [])
         user_index = _find_user_index(config, user_id)
 
         if user_index == -1:
-            raise HTTPException(status_code=404, detail=f"用户 {user_id} 不存在")
+            raise HTTPException(status_code=404, detail=f"用戶 {user_id} 不存在")
 
-        user = config["users"][user_index]
+        user = users[user_index]
 
         # 防止修改admin帳號
         if user.get("username") == "admin":
-            raise HTTPException(status_code=400, detail="不能修改admin帳號的权限")
+            raise HTTPException(status_code=400, detail="不能修改admin帳號的權限")
 
-        # 防止管理员给自己降级
-        current_user = identity.get("sub", "")
-        if current_user == user_id and request.role != "admin":
-            raise HTTPException(status_code=400, detail="不能修改自己的管理员权限")
+        # 防止管理員給自己降級（避免失去 admin:access 權限）
+        current_username = identity.get("sub", "")
+        if current_username == user_id and request.role != "admin":
+            raise HTTPException(status_code=400, detail="不能修改自己的管理員權限到非管理員角色") # 更精確的錯誤提示
 
-        # 更新角色
-        if request.role == "admin":
-            user["roles"] = ["admin"]
-            user.pop("groups", None)  # 移除组设置
-        elif request.role == "moderator":
-            user["roles"] = ["moderator"]
-            user.pop("groups", None)
-        else:  # user
-            user["roles"] = ["user"]
-            user.pop("groups", None)
-            
-        _save_auth_config(config)
+        # 更新內部角色和組（新的模式下，這裡需要明確處理組）
+        user["roles"] = [request.role] # 角色只保留一個主角色
+        # 根據需要更新 groups 字段。如果角色和組不同步，可能導致問題
+        # 在新的權限模型下，建議角色僅作為用戶的標識，真正的權限由 groups 決定
+        # 這裡的邏輯需要與 auth_config.resolve_effective_roles 協同工作
+        # 為了簡化，如果設置了角色，就清除 groups，讓 resolve_effective_roles 根據角色來推斷或應用默認組
+        user.pop("groups", None) # 移除組設置，由 resolve_effective_roles 處理
 
-        logging.info(f"用户 {user_id} 角色更新成功")
-        return {"message": f"用户 {user_id} 角色已更新为 {request.role}"}
+        _save_auth_config_to_global(config)
+
+        logging.info(f"用戶 {user_id} 角色更新成功")
+        return {"message": f"用戶 {user_id} 角色已更新為 {request.role}"}
 
     except HTTPException:
         raise
     except Exception as e:
-        logging.error(f"更新用户角色失败: {e}")
-        raise HTTPException(status_code=500, detail=f"更新用户角色失败: {str(e)}")
+        logging.error(f"更新用戶角色失敗: {e}")
+        raise HTTPException(status_code=500, detail=f"更新用戶角色失敗: {str(e)}")
 
 
 @router.put("/{user_id}/status")
 async def update_user_status(
     user_id: str,
     request: UpdateUserStatusRequest,
-    identity: Dict[str, Any] = Depends(require_roles(["admin"]))
+    identity: Dict[str, Any] = Depends(require_permissions(["admin:users:manage"])) # 使用細粒度權限
 ):
-    """更新用户状态（仅管理员）"""
-    logging.info(f"管理员更新用户 {user_id} 状态为 {request.status}")
+    """更新用戶狀態（僅管理員）"""
+    logging.info(f"管理員更新用戶 {user_id} 狀態為 {request.status}")
     try:
-        # 验证状态
         valid_statuses = ["active", "inactive", "banned"]
         if request.status not in valid_statuses:
-            raise HTTPException(status_code=400, detail=f"无效的状态: {request.status}")
+            raise HTTPException(status_code=400, detail=f"無效的狀態: {request.status}")
 
-        # 验证用户名是否有效
         if not user_id or not isinstance(user_id, str) or len(user_id.strip()) == 0:
-            raise HTTPException(status_code=400, detail="无效的用户名")
+            raise HTTPException(status_code=400, detail="無效的用戶名")
 
-        config = _load_auth_config()
+        config = _load_auth_config_from_global()
+        users = config.get("users", [])
         user_index = _find_user_index(config, user_id)
 
         if user_index == -1:
-            raise HTTPException(status_code=404, detail=f"用户 {user_id} 不存在")
+            raise HTTPException(status_code=404, detail=f"用戶 {user_id} 不存在")
 
-        user = config["users"][user_index]
+        user = users[user_index]
 
-        # 防止管理员禁用自己
-        current_user = identity.get("sub", "")
-        if current_user == user_id and request.status == "banned":
-            raise HTTPException(status_code=400, detail="不能禁用自己的账户")
+        current_username = identity.get("sub", "")
+        if current_username == user_id and request.status == "banned":
+            raise HTTPException(status_code=400, detail="不能禁用自己的賬戶")
 
-        # 更新状态
         user["status"] = request.status
+        _save_auth_config_to_global(config)
 
-        _save_auth_config(config)
-
-        logging.info(f"用户 {user_id} 状态更新成功")
-        return {"message": f"用户 {user_id} 状态已更新为 {request.status}"}
+        logging.info(f"用戶 {user_id} 狀態更新成功")
+        return {"message": f"用戶 {user_id} 狀態已更新為 {request.status}"}
 
     except HTTPException:
         raise
     except Exception as e:
-        logging.error(f"更新用户状态失败: {e}")
-        raise HTTPException(status_code=500, detail=f"更新用户状态失败: {str(e)}")
+        logging.error(f"更新用戶狀態失敗: {e}")
+        raise HTTPException(status_code=500, detail=f"更新用戶狀態失敗: {str(e)}")
 
 
 @router.post("/", response_model=UserInfo)
 async def create_user(
     request: CreateUserRequest,
-    identity: Dict[str, Any] = Depends(require_roles(["admin"]))
+    identity: Dict[str, Any] = Depends(require_permissions(["admin:users:manage"])) # 使用細粒度權限
 ):
-    """创建新用户（仅管理员）"""
-    logging.info(f"管理员创建新用户: {request.username}")
+    """創建新用戶（僅管理員）"""
+    logging.info(f"管理員創建新用戶: {request.username}")
     try:
-        # 验证用户名
         if not request.username or len(request.username.strip()) == 0:
-            raise HTTPException(status_code=400, detail="用户名不能为空")
+            raise HTTPException(status_code=400, detail="用戶名不能為空")
 
-        # 验证密码
         if not request.password or len(request.password) < 6:
-            raise HTTPException(status_code=400, detail="密码长度至少为6位")
+            raise HTTPException(status_code=400, detail="密碼長度至少為6位")
 
-        config = _load_auth_config()
+        config = _load_auth_config_from_global()
         users = config.get("users", [])
 
-        # 检查用户名是否已存在
         for user in users:
             if isinstance(user, dict) and user.get("username") == request.username:
-                raise HTTPException(status_code=400, detail=f"用户名 '{request.username}' 已存在")
+                raise HTTPException(status_code=400, detail=f"用戶名 '{request.username}' 已存在")
 
-        # 创建新用户
         new_user = {
             "username": request.username,
             "password_hash": auth_config.hash_password(request.password),
@@ -422,194 +393,175 @@ async def create_user(
             "generation_count": 0
         }
 
-        # 设置身分組，如果未提供身分組，则设置默认为普通用户角色
         if request.groups:
-            # 验证身分組是否存在
-            # 从身分組配置文件中获取身分組配置
-            import global_data
-            try:
-                with open(global_data.GROUPS_FILE, "r", encoding="utf-8") as f:
-                    groups_config = json.load(f)
-                groups = groups_config.get("groups", {})
-                invalid_groups = [group for group in request.groups if group not in groups]
-                if invalid_groups:
-                    raise HTTPException(status_code=400, detail=f"无效的身分組: {invalid_groups}")
-            except Exception as e:
-                logging.error(f"加载身分組配置失败: {e}")
-                raise HTTPException(status_code=500, detail="加载身分組失败")
+            # 驗證身分組是否存在（從 global_data 獲取）
+            groups_config = global_data.AUTH_CONFIG.get("groups", {})
+            invalid_groups = [group for group in request.groups if group not in groups_config]
+            if invalid_groups:
+                raise HTTPException(status_code=400, detail=f"無效的身分組: {invalid_groups}")
             
             new_user["groups"] = request.groups
-            # 当设置了身分組时，移除 roles 字段，避免冲突
-            new_user.pop("roles", None)
+            new_user.pop("roles", None) # 設置了身分組，移除 roles 字段
         else:
-            # 如果没有提供身分組，则将角色设置为普通用户
+            # 如果沒有提供身分組，則將角色設置為普通用戶，並從 default_user_groups 中獲取身分組
             new_user["roles"] = ["user"]
-            new_user.pop("groups", None) # 移除 groups 字段，避免冲突
+            new_user["groups"] = global_data.AUTH_CONFIG.get("default_user_groups", [])
 
         users.append(new_user)
         config["users"] = users
-        _save_auth_config(config)
+        _save_auth_config_to_global(config)
 
-        # 返回用户信息
-        role, _ = _get_user_role_and_groups(new_user)
+        role, groups = _get_user_role_and_groups(new_user)
         user_info = UserInfo(
             id=request.username,
             username=request.username,
             email=new_user["email"],
-            role=role, # 这里 role 会根据 _get_user_role_and_groups 再次解析
-            groups=new_user.get("groups", []), # 添加 groups 字段
+            role=role,
+            groups=groups,
             status=new_user["status"],
             created_at=new_user["created_at"],
             last_login=new_user["last_login"],
             generation_count=new_user["generation_count"]
         )
 
-        logging.info(f"用户 {request.username} 创建成功")
+        logging.info(f"用戶 {request.username} 創建成功")
         return user_info
 
     except HTTPException:
         raise
     except Exception as e:
-        logging.error(f"创建用户失败: {e}")
-        raise HTTPException(status_code=500, detail=f"创建用户失败: {str(e)}")
+        logging.error(f"創建用戶失敗: {e}")
+        raise HTTPException(status_code=500, detail=f"創建用戶失敗: {str(e)}")
 
 
 @router.delete("/{user_id}")
 async def delete_user(
     user_id: str,
-    identity: Dict[str, Any] = Depends(require_roles(["admin"]))
+    identity: Dict[str, Any] = Depends(require_permissions(["admin:users:manage"])) # 使用細粒度權限
 ):
-    """删除用户（仅管理员）"""
-    logging.info(f"管理员删除用户: {user_id}")
+    """刪除用戶（僅管理員）"""
+    logging.info(f"管理員刪除用戶: {user_id}")
     try:
-        # 验证用户名是否有效
         if not user_id or not isinstance(user_id, str) or len(user_id.strip()) == 0:
-            raise HTTPException(status_code=400, detail="无效的用户名")
+            raise HTTPException(status_code=400, detail="無效的用戶名")
 
-        config = _load_auth_config()
+        config = _load_auth_config_from_global()
+        users = config.get("users", [])
         user_index = _find_user_index(config, user_id)
 
         if user_index == -1:
-            raise HTTPException(status_code=404, detail=f"用户 {user_id} 不存在")
+            raise HTTPException(status_code=404, detail=f"用戶 {user_id} 不存在")
 
-        user = config["users"][user_index]
+        user = users[user_index]
 
-        # 防止删除自己
-        current_user = identity.get("sub", "")
-        if current_user == user_id:
-            raise HTTPException(status_code=400, detail="不能删除自己的账户")
+        current_username = identity.get("sub", "")
+        if current_username == user_id:
+            raise HTTPException(status_code=400, detail="不能刪除自己的賬戶")
+        
+        # 防止刪除超級管理員（假設 admin:access 權限代表超級管理員）
+        role, groups = _get_user_role_and_groups(user)
+        if "admin" in role: # 這裡應該更嚴謹地檢查是否是擁有所有 admin 權限的 admin
+            # 獲取 admin 身分組的權限
+            admin_group_permissions = global_data.AUTH_CONFIG.get("groups", {}).get("admin", {}).get("permissions", [])
+            # 檢查被刪除的用戶是否擁有 admin:access 且是 admin 身分組中的用戶
+            if "admin:access" in admin_group_permissions and "admin" in groups:
+                 raise HTTPException(status_code=400, detail="不能刪除超級管理員賬戶")
 
-        # 防止删除超级管理员（如果有的话）
-        if user.get("username") == "admin" and user.get("roles") == ["admin"]:
-            raise HTTPException(status_code=400, detail="不能删除超级管理员账户")
+        users.pop(user_index)
+        config["users"] = users
+        _save_auth_config_to_global(config)
 
-        # 删除用户
-        config["users"].pop(user_index)
-        _save_auth_config(config)
-
-        logging.info(f"用户 {user_id} 删除成功")
-        return {"message": f"用户 {user_id} 已删除"}
+        logging.info(f"用戶 {user_id} 刪除成功")
+        return {"message": f"用戶 {user_id} 已刪除"}
 
     except HTTPException:
         raise
     except Exception as e:
-        logging.error(f"删除用户失败: {e}")
-        raise HTTPException(status_code=500, detail=f"删除用户失败: {str(e)}")
+        logging.error(f"刪除用戶失敗: {e}")
+        raise HTTPException(status_code=500, detail=f"刪除用戶失敗: {str(e)}")
 
 
 @router.put("/{user_id}/reset-password")
 async def reset_user_password(
     user_id: str,
     request: ResetPasswordRequest,
-    identity: Dict[str, Any] = Depends(require_roles(["admin"]))
+    identity: Dict[str, Any] = Depends(require_permissions(["admin:users:manage"])) # 使用細粒度權限
 ):
     """重置用户密码（仅管理员）"""
-    logging.info(f"管理员重置用户 {user_id} 密码")
+    logging.info(f"管理員重置用戶 {user_id} 密碼")
     try:
-        # 验证新密码
         if not request.new_password or len(request.new_password) < 6:
-            raise HTTPException(status_code=400, detail="密码长度至少为6位")
+            raise HTTPException(status_code=400, detail="密碼長度至少為6位")
 
-        # 验证用户名是否有效
         if not user_id or not isinstance(user_id, str) or len(user_id.strip()) == 0:
-            raise HTTPException(status_code=400, detail="无效的用户名")
+            raise HTTPException(status_code=400, detail="無效的用戶名")
 
-        config = _load_auth_config()
+        config = _load_auth_config_from_global()
+        users = config.get("users", [])
         user_index = _find_user_index(config, user_id)
 
         if user_index == -1:
-            raise HTTPException(status_code=404, detail=f"用户 {user_id} 不存在")
+            raise HTTPException(status_code=404, detail=f"用戶 {user_id} 不存在")
 
-        user = config["users"][user_index]
+        user = users[user_index]
 
-        # 更新密码
         user["password_hash"] = auth_config.hash_password(request.new_password)
+        _save_auth_config_to_global(config)
 
-        _save_auth_config(config)
-
-        logging.info(f"用户 {user_id} 密码重置成功")
-        return {"message": f"用户 {user_id} 的密码已重置"}
+        logging.info(f"用戶 {user_id} 密碼重置成功")
+        return {"message": f"用戶 {user_id} 的密碼已重置"}
 
     except HTTPException:
         raise
     except Exception as e:
-        logging.error(f"重置用户密码失败: {e}")
-        raise HTTPException(status_code=500, detail=f"重置用户密码失败: {str(e)}")
+        logging.error(f"重置用戶密碼失敗: {e}")
+        raise HTTPException(status_code=500, detail=f"重置用戶密碼失敗: {str(e)}")
 
 @router.put("/{user_id}/groups")
 async def update_user_groups(
     user_id: str,
     request: UpdateUserGroupsRequest,
-    identity: Dict[str, Any] = Depends(require_roles(["admin"]))
+    identity: Dict[str, Any] = Depends(require_permissions(["admin:users:manage"])) # 使用細粒度權限
 ):
-    """更新用户身分組（仅管理员）"""
-    logging.info(f"管理员更新用户 {user_id} 身分組为 {request.groups}")
+    """更新用戶身分組（僅管理員）"""
+    logging.info(f"管理員更新用戶 {user_id} 身分組為 {request.groups}")
     try:
-        # 验证用户名是否有效
         if not user_id or not isinstance(user_id, str) or len(user_id.strip()) == 0:
-            raise HTTPException(status_code=400, detail="无效的用户名")
+            raise HTTPException(status_code=400, detail="無效的用戶名")
 
-        config = _load_auth_config()
+        config = _load_auth_config_from_global()
+        users = config.get("users", [])
         user_index = _find_user_index(config, user_id)
 
         if user_index == -1:
-            raise HTTPException(status_code=404, detail=f"用户 {user_id} 不存在")
+            raise HTTPException(status_code=404, detail=f"用戶 {user_id} 不存在")
 
-        user = config["users"][user_index]
+        user = users[user_index]
 
         # 防止修改admin帳號
         if user.get("username") == "admin":
-            raise HTTPException(status_code=400, detail="不能修改admin帳號的权限")
+            raise HTTPException(status_code=400, detail="不能修改admin帳號的權限")
 
-        # 防止管理员修改自己的身分組
-        current_user = identity.get("sub", "")
-        if current_user == user_id:
+        current_username = identity.get("sub", "")
+        if current_username == user_id:
             raise HTTPException(status_code=400, detail="不能修改自己的身分組")
 
-        # 验证身分組是否存在
-        # 从身分組配置文件中获取身分組配置
-        try:
-            with open(global_data.GROUPS_FILE, "r", encoding="utf-8") as f:
-                groups_config = json.load(f)
-            groups = groups_config.get("groups", {})
-            invalid_groups = [group for group in request.groups if group not in groups]
-            if invalid_groups:
-                raise HTTPException(status_code=400, detail=f"无效的身分組: {invalid_groups}")
-        except Exception as e:
-            logging.error(f"加载身分組配置失败: {e}")
-            raise HTTPException(status_code=500, detail="加载身分組配置失败")
+        # 驗證身分組是否存在（從 global_data 獲取）
+        groups_config = global_data.AUTH_CONFIG.get("groups", {})
+        invalid_groups = [group for group in request.groups if group not in groups_config]
+        if invalid_groups:
+            raise HTTPException(status_code=400, detail=f"無效的身分組: {invalid_groups}")
 
-        # 更新身分組
         user["groups"] = request.groups
-        user.pop("roles", None)  # 移除角色设置
+        user.pop("roles", None)  # 移除角色設置，因為現在通過 groups 管理權限
 
-        _save_auth_config(config)
+        _save_auth_config_to_global(config)
 
-        logging.info(f"用户 {user_id} 身分組更新成功")
-        return {"message": f"用户 {user_id} 身分組已更新为 {request.groups}"}
+        logging.info(f"用戶 {user_id} 身分組更新成功")
+        return {"message": f"用戶 {user_id} 身分組已更新為 {request.groups}"}
 
     except HTTPException:
         raise
     except Exception as e:
-        logging.error(f"更新用户身分組失败: {e}")
-        raise HTTPException(status_code=500, detail=f"更新用户身分組失败: {str(e)}")
+        logging.error(f"更新用戶身分組失敗: {e}")
+        raise HTTPException(status_code=500, detail=f"更新用戶身分組失敗: {str(e)}")

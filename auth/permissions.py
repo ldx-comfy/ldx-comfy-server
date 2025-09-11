@@ -5,7 +5,8 @@
 
 from typing import Any, Dict, List, Optional
 from fastapi import Depends, HTTPException, status, Header
-import json
+from typing import Any, Dict, List, Optional
+from fastapi import Depends, HTTPException, status, Header
 from auth import config as auth_config
 from auth import jwt as jwt_lib
 import global_data
@@ -33,14 +34,14 @@ def _extract_bearer_token(authorization: Optional[str]) -> str:
 
 def get_current_identity(authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
     """
-    从 Authorization: Bearer <token> 解析并验证 JWT，返回 claims。
-    校验失败一律 401。
+    從 Authorization: Bearer <token> 解析並驗證 JWT，返回 claims。
+    校驗失敗一律 401。
     """
     token = _extract_bearer_token(authorization)
     secret = auth_config.get_jwt_secret()
     try:
         claims = jwt_lib.decode(token, secret)
-        # 简单校验必要字段
+        # 簡單校驗必要字段
         if "sub" not in claims or "exp" not in claims:
             raise ValueError("Invalid claims")
         return claims
@@ -56,12 +57,8 @@ def require_permissions(required: List[str], match: str = "any"):
     校驗失敗返回 403。
     """
     def _dep(identity: Dict[str, Any] = Depends(get_current_identity)) -> Dict[str, Any]:
-        # 讀取身分組配置
-        try:
-            with open(str(global_data.GROUPS_FILE), "r", encoding="utf-8") as f:
-                groups_config = json.load(f)
-        except:
-            groups_config = {"groups": {}}
+        # 從 global_data 獲取身分組配置
+        groups_config = global_data.AUTH_CONFIG.get("groups", {})
         
         # 獲取用戶的身分組
         user_groups = identity.get("groups", [])
@@ -73,16 +70,19 @@ def require_permissions(required: List[str], match: str = "any"):
         
         # 從身分組獲取權限
         for group_id in user_groups:
-            group_data = groups_config.get("groups", {}).get(group_id, {})
+            group_data = groups_config.get(group_id, {})
             if isinstance(group_data, dict) and "permissions" in group_data:
                 for perm in group_data["permissions"]:
                     user_permissions.add(perm)
         
-        # 從直接角色獲取權限
+        # 從直接角色獲取權限（如果角色也代表權限，此處可保留）
+        # 在新的權限模型中，建議將所有細粒度權限都定義在 groups 中，
+        # roles 僅作為用戶的頂層標識，不再直接作為權限。
+        # 如果需要，可以將 roles 映射到 permissions。
         user_roles = identity.get("roles", [])
         if isinstance(user_roles, list):
             for role in user_roles:
-                user_permissions.add(role)
+                user_permissions.add(role) # 可以考慮移除此行，如果 roles 不直接是 permissions
         
         # 驗證權限
         def _check_permission(req_perm: str) -> bool:
@@ -94,7 +94,7 @@ def require_permissions(required: List[str], match: str = "any"):
             if req_perm.endswith(":*"):
                 prefix = req_perm[:-2]  # 移除 ":*"
                 for perm in user_permissions:
-                    if perm.startswith(prefix + ":"):
+                    if perm.startswith(prefix + ":") and len(perm) > len(prefix) + 1: # 確保通配符匹配不是自身
                         return True
             
             return False
