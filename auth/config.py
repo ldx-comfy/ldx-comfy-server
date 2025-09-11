@@ -27,7 +27,7 @@ import global_data
 logger = logging.getLogger(__name__)
 
 _DEFAULT_SECRET = "change-me"
-_DEFAULT_EXPIRES_SECONDS = 3600
+_DEFAULT_EXPIRES_SECONDS = 604800  # 7 days in seconds for temporary validity
 
 _ENV_CONFIG_PATH = "AUTH_CONFIG_PATH"
 _ENV_JWT_SECRET = "JWT_SECRET"
@@ -259,7 +259,7 @@ def _init_config() -> None:
         # Create default configuration with only admin user
         default_config = {
             "jwt_secret": "your-jwt-secret-here-change-in-production",
-            "jwt_expires_seconds": 3600,
+            "jwt_expires_seconds": 604800,  # 7 days for temporary validity
             "users": [
                 {
                     "username": "admin",
