@@ -248,7 +248,9 @@ async def get_user_generation_history(identity: Dict[str, Any] = Depends(require
         history = await get_user_history(user_id)
         # 處理圖片路徑以避免重複前綴
         processed_history = process_image_paths(history)
-        # 转换为base64格式供前端使用
+        # 先將輸入圖片（nodes/files）轉為 base64，確保帶圖片的歷史輸入也無論如何是 data URL
+        processed_history = _convert_input_images_to_base64_for_frontend(processed_history)
+        # 再將結果圖片轉為 base64
         frontend_history = _convert_images_to_base64_for_frontend(processed_history)
         logging.info(f"成功獲取用戶 {user_id} 的生成歷史記錄，共 {len(frontend_history)} 條")
         return frontend_history
@@ -278,8 +280,10 @@ async def get_user_generation_history_detail(execution_id: str, identity: Dict[s
             logging.warning(f"未找到執行ID '{execution_id}' 的生成歷史記錄")
             raise HTTPException(status_code=404, detail=f"未找到執行ID '{execution_id}' 的生成歷史記錄")
 
-        # 转换为base64格式供前端使用
-        frontend_record = _convert_images_to_base64_for_frontend([record])[0]
+        # 先將輸入圖片（nodes/files）轉為 base64
+        converted_list = _convert_input_images_to_base64_for_frontend([record])
+        # 再將結果圖片轉為 base64
+        frontend_record = _convert_images_to_base64_for_frontend(converted_list)[0]
         logging.info(f"成功獲取執行ID '{execution_id}' 的生成歷史記錄詳情")
         return frontend_record
     except HTTPException:
@@ -298,7 +302,9 @@ async def get_all_users_generation_history(identity: Dict[str, Any] = Depends(re
         history = get_all_generation_history()
         # 處理圖片路徑以避免重複前綴
         processed_history = process_image_paths(history)
-        # 转换为base64格式供前端使用
+        # 先將輸入圖片（nodes/files）轉為 base64
+        processed_history = _convert_input_images_to_base64_for_frontend(processed_history)
+        # 再將結果圖片轉為 base64
         frontend_history = _convert_images_to_base64_for_frontend(processed_history)
         logging.info(f"管理員成功獲取所有用戶的生成歷史記錄，共 {len(frontend_history)} 條")
         return frontend_history
@@ -327,8 +333,10 @@ async def get_any_user_generation_history_detail(execution_id: str, identity: Di
             logging.warning(f"未找到執行ID '{execution_id}' 的生成歷史記錄")
             raise HTTPException(status_code=404, detail=f"未找到執行ID '{execution_id}' 的生成歷史記錄")
 
-        # 转换为base64格式供前端使用
-        frontend_record = _convert_images_to_base64_for_frontend([record])[0]
+        # 先將輸入圖片（nodes/files）轉為 base64
+        converted_list = _convert_input_images_to_base64_for_frontend([record])
+        # 再將結果圖片轉為 base64
+        frontend_record = _convert_images_to_base64_for_frontend(converted_list)[0]
         logging.info(f"管理員成功獲取執行ID '{execution_id}' 的生成歷史記錄詳情")
         return frontend_record
     except HTTPException:
@@ -449,15 +457,12 @@ def _process_images_for_history(result: Dict[str, Any], execution_id: str) -> Di
 
 def _convert_images_to_base64_for_frontend(history_records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
-    将历史记录中的文件路径图像转换为base64格式供前端使用
-
-    Args:
-        history_records: 历史记录列表
-
-    Returns:
-        转换后的历史记录列表
+    将历史记录中的文件路径图像转换为base64格式供前端使用。
+    无论如何，保证返回给前端的 images 字段均为 data URL。
+    当源文件不存在或读取失败时，使用 1x1 透明 PNG 作为占位图。
     """
     processed_records = []
+    PLACEHOLDER_DATA_URL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGMAAQAABQABDQottAAAAABJRU5ErkJggg=="
 
     for record in history_records:
         processed_record = json.loads(json.dumps(record))  # 深拷贝
@@ -465,45 +470,173 @@ def _convert_images_to_base64_for_frontend(history_records: List[Dict[str, Any]]
         if 'result' in processed_record and 'images' in processed_record['result']:
             images = processed_record['result']['images']
             if isinstance(images, list):
-                for i, image_path in enumerate(images):
-                    if isinstance(image_path, str) and not image_path.startswith('data:'):
-                        try:
-                            # 构建完整文件路径（添加comfy_out_image前缀）
-                            full_path = os.path.join(global_data.COMFY_OUTPUT_DIR, 'comfy_out_image', image_path)
+                for i, image_entry in enumerate(images):
+                    # 已经是 data URL，直接跳过
+                    if isinstance(image_entry, str) and image_entry.startswith('data:'):
+                        continue
 
-                            if os.path.exists(full_path):
-                                # 读取文件并转换为base64
-                                with open(full_path, 'rb') as f:
-                                    image_data = f.read()
+                    try:
+                        file_candidates = []
+                        if isinstance(image_entry, str):
+                            candidate_rel = image_entry.lstrip('/')
 
-                                # 获取文件扩展名来确定MIME类型
-                                _, ext = os.path.splitext(image_path)
-                                ext = ext.lower()
-                                if ext == '.png':
-                                    mime_type = 'image/png'
-                                elif ext in ['.jpg', '.jpeg']:
-                                    mime_type = 'image/jpeg'
-                                elif ext == '.gif':
-                                    mime_type = 'image/gif'
-                                elif ext == '.webp':
-                                    mime_type = 'image/webp'
-                                else:
-                                    mime_type = 'image/png'  # 默认
+                            # 1) 默认保存目录：.../comfy_out_image/<filename>
+                            file_candidates.append(os.path.join(global_data.COMFY_OUTPUT_DIR, 'comfy_out_image', candidate_rel))
 
-                                # 转换为base64数据URL
-                                base64_data = base64.b64encode(image_data).decode('utf-8')
-                                images[i] = f"data:{mime_type};base64,{base64_data}"
-                                logging.debug(f"转换图像路径为base64: {image_path}")
+                            # 2) 如果记录里自带 comfy_out_image/ 前缀，去掉后再尝试一次
+                            if candidate_rel.startswith('comfy_out_image/'):
+                                trimmed = candidate_rel[len('comfy_out_image/'):]
+                                file_candidates.append(os.path.join(global_data.COMFY_OUTPUT_DIR, 'comfy_out_image', trimmed))
+
+                            # 3) 兼容早期保存到 COMFY_OUTPUT_DIR 根目录的情况
+                            file_candidates.append(os.path.join(global_data.COMFY_OUTPUT_DIR, candidate_rel))
+
+                        # 找到第一个存在的文件
+                        file_path = next((p for p in file_candidates if os.path.exists(p)), None)
+
+                        if file_path:
+                            with open(file_path, 'rb') as f:
+                                image_data = f.read()
+
+                            # 从扩展名推断 MIME
+                            ext = os.path.splitext(file_path)[1].lower()
+                            if ext == '.png':
+                                mime_type = 'image/png'
+                            elif ext in ['.jpg', '.jpeg']:
+                                mime_type = 'image/jpeg'
+                            elif ext == '.gif':
+                                mime_type = 'image/gif'
+                            elif ext == '.webp':
+                                mime_type = 'image/webp'
                             else:
-                                logging.warning(f"图像文件不存在: {full_path}")
-                        except Exception as e:
-                            logging.error(f"转换图像为base64失败 {image_path}: {e}")
+                                mime_type = 'image/png'  # 默认
+
+                            base64_data = base64.b64encode(image_data).decode('utf-8')
+                            images[i] = f"data:{mime_type};base64,{base64_data}"
+                            logging.debug(f"转换图像路径为base64: {file_path}")
+                        else:
+                            logging.warning(f"图像文件不存在，使用占位图: {image_entry}")
+                            images[i] = PLACEHOLDER_DATA_URL
+
+                    except Exception as e:
+                        logging.error(f"转换图像为base64失败，使用占位图 {image_entry}: {e}")
+                        images[i] = PLACEHOLDER_DATA_URL
 
         processed_records.append(processed_record)
 
     return processed_records
 
 
+def _convert_input_images_to_base64_for_frontend(history_records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    将历史记录中的输入图片（input_params.nodes 与 input_params.files）转换为 base64 数据URL，供前端使用。
+    无论如何均返回 data URL；当源文件不存在或读取失败时，使用 1x1 透明 PNG 作为占位图。
+    """
+    processed_records: List[Dict[str, Any]] = []
+    PLACEHOLDER_DATA_URL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGMAAQAABQABDQottAAAAABJRU5ErkJggg=="
+
+    try:
+        upload_dir = os.fspath(global_data.UPLOAD_DIR)
+    except Exception:
+        upload_dir = str(global_data.UPLOAD_DIR)
+
+    def _to_data_url_from_uploaded_or_path(ref: str) -> str:
+        """将输入引用（原始文件名/相对或绝对路径/dataURL）转换为 data URL。"""
+        if not isinstance(ref, str):
+            return PLACEHOLDER_DATA_URL
+        if ref.startswith("data:"):
+            return ref
+
+        try:
+            candidates: List[str] = []
+
+            # 绝对路径
+            if os.path.isabs(ref):
+                candidates.append(ref)
+
+            # 作为相对路径或纯文件名，拼到 uploads 目录下
+            candidates.append(os.path.join(upload_dir, ref))
+
+            # 在 uploads 目录中查找形如 '<uuid>_<original_name>' 的文件
+            try:
+                if os.path.isdir(upload_dir):
+                    for fname in os.listdir(upload_dir):
+                        if fname == ref:
+                            candidates.append(os.path.join(upload_dir, fname))
+                        elif "_" in fname:
+                            suffix = fname.split("_", 1)[1]
+                            if suffix == ref:
+                                candidates.append(os.path.join(upload_dir, fname))
+            except Exception as e:
+                logging.debug("列举上传目录失败: %s", e)
+
+            file_path = next((p for p in candidates if os.path.exists(p)), None)
+            if not file_path:
+                logging.warning("未找到输入图像文件，使用占位图: %s", ref)
+                return PLACEHOLDER_DATA_URL
+
+            with open(file_path, "rb") as f:
+                image_data = f.read()
+
+            # 根据扩展名推断 MIME
+            _, ext = os.path.splitext(file_path)
+            ext = ext.lower()
+            if ext == ".png":
+                mime_type = "image/png"
+            elif ext in [".jpg", ".jpeg"]:
+                mime_type = "image/jpeg"
+            elif ext == ".gif":
+                mime_type = "image/gif"
+            elif ext == ".webp":
+                mime_type = "image/webp"
+            else:
+                mime_type = "image/png"  # 默认
+
+            base64_data = base64.b64encode(image_data).decode("utf-8")
+            return f"data:{mime_type};base64,{base64_data}"
+        except Exception as e:
+            logging.error("读取输入图像失败，使用占位图: %s", e)
+            return PLACEHOLDER_DATA_URL
+
+    for record in history_records:
+        processed_record = json.loads(json.dumps(record))  # 深拷贝
+        try:
+            input_params = processed_record.get("input_params", {})
+
+            # 1) 处理 nodes 中的 LoadImageOutput.value
+            nodes = input_params.get("nodes")
+            if isinstance(nodes, list):
+                for node in nodes:
+                    try:
+                        if (
+                            isinstance(node, dict)
+                            and node.get("class_type") == "LoadImageOutput"
+                            and "value" in node
+                            and isinstance(node.get("value"), str)
+                        ):
+                            node["value"] = _to_data_url_from_uploaded_or_path(node["value"])
+                    except Exception as ne:
+                        logging.error("转换输入节点图像为base64失败: %s", ne)
+                        if isinstance(node, dict):
+                            node["value"] = PLACEHOLDER_DATA_URL
+
+            # 2) 处理 files 列表中的原始文件名
+            files_list = input_params.get("files")
+            if isinstance(files_list, list):
+                for i, fname in enumerate(files_list):
+                    if isinstance(fname, str):
+                        try:
+                            files_list[i] = _to_data_url_from_uploaded_or_path(fname)
+                        except Exception as fe:
+                            logging.error("转换输入文件为base64失败 %s: %s", fname, fe)
+                            files_list[i] = PLACEHOLDER_DATA_URL
+
+        except Exception as e:
+            logging.error("处理输入图像为base64失败: %s", e)
+
+        processed_records.append(processed_record)
+
+    return processed_records
 def _get_field_type(class_type: str) -> str:
     """根据节点类型获取表单字段类型"""
     logging.debug(f"获取字段类型映射，class_type: {class_type}")
