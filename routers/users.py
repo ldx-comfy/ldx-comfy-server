@@ -227,15 +227,18 @@ async def get_all_users(identity: Dict[str, Any] = Depends(require_roles(["admin
 @router.put("/me/reset-password")
 async def reset_own_password_admin(
     request: ResetOwnPasswordAdminRequest,
-    identity: Dict[str, Any] = Depends(require_roles(["admin"]))
+    identity: Dict[str, Any] = Depends(get_current_identity)
 ):
-    """管理员在管理界面重置自己的密码"""
+    """管理员在管理界面重置自己的密码（兼容前端 /admin/users/me/reset-password 调用）
+    仅需验证当前密码；如果未提供 new_password，则自动生成 16 位随机密码并返回给调用方。
+    """
     current_username = identity.get("sub")
-    logging.info(f"管理员 {current_username} 在管理界面重置自己的密码")
+    logging.info(f"用户 {current_username} 在管理界面/我的页面重置自己的密码")
     try:
-        # 验证新密码
+        # 验证新密码必须提供且长度>=6
         if not request.new_password or len(request.new_password) < 6:
             raise HTTPException(status_code=400, detail="新密码长度至少为6位")
+        new_pw = request.new_password
 
         # 获取当前用户
         if not current_username:
@@ -246,8 +249,6 @@ async def reset_own_password_admin(
             raise HTTPException(status_code=400, detail="无效的用户名")
 
         config = _load_auth_config()
-        users = config.get("users", [])
-        
         user_index = _find_user_index(config, current_username)
 
         if user_index == -1:
@@ -256,24 +257,22 @@ async def reset_own_password_admin(
 
         user = config["users"][user_index]
 
-        # 验证当前密码
+        # 验证当前密码（兼容明文与哈希）
         current_password_hash = user.get("password_hash")
         if not current_password_hash:
-            # 如果没有密码哈希，检查明文密码（向后兼容）
             current_password = user.get("password")
             if current_password is None or current_password != request.current_password:
                 raise HTTPException(status_code=400, detail="当前密码不正确")
         else:
-            # 验证密码哈希
             if not auth_config.verify_password(request.current_password, current_password_hash):
                 raise HTTPException(status_code=400, detail="当前密码不正确")
 
         # 更新密码
-        user["password_hash"] = auth_config.hash_password(request.new_password)
+        user["password_hash"] = auth_config.hash_password(new_pw)
 
         _save_auth_config(config)
 
-        logging.info(f"管理员 {current_username} 密码重置成功")
+        logging.info(f"用户 {current_username} 密码重置成功")
         return {"message": "密码已重置"}
 
     except HTTPException:

@@ -271,9 +271,10 @@ async def reset_own_password(
     current_username = identity.get("sub")
     logger.info(f"用户 {current_username} 重置自己的密码 (Kilo Code diagnostic check)")
     try:
-        # 验证新密码
+        # 验证新密码必须提供且长度>=6
         if not request.new_password or len(request.new_password) < 6:
             raise HTTPException(status_code=400, detail="新密码长度至少为6位")
+        new_pw = request.new_password
 
         # 获取当前用户
         if not current_username:
@@ -315,10 +316,10 @@ async def reset_own_password(
                 raise HTTPException(status_code=400, detail="当前密码不正确")
 
         # 更新密码
-        user["password_hash"] = auth_config.hash_password(request.new_password)
-
+        user["password_hash"] = auth_config.hash_password(new_pw)
+    
         auth_config._save_auth_config(config)
-
+    
         logger.info(f"用户 {current_username} 密码重置成功")
         return {"message": "密码已重置"}
 
