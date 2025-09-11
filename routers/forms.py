@@ -35,7 +35,7 @@ class WorkflowExecutionResponse(BaseModel):
 
 
 @router.get("/workflows", response_model=List[str])
-async def get_available_workflows():
+async def get_available_workflows(identity: Dict[str, Any] = Depends(get_current_identity)):
     """获取可用工作流列表"""
     logging.info("开始获取可用工作流列表")
     try:

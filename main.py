@@ -105,6 +105,10 @@ async def log_requests(request: Request, call_next):
 # 注册中间件
 app.add_middleware(BaseHTTPMiddleware, dispatch=log_requests)
 
+# 注册權限驗證中間件
+from auth.middleware import AuthMiddleware
+app.add_middleware(AuthMiddleware)
+
 # CORS 配置：允许前端开发服务器跨域访问（Astro dev: http://localhost:4321）
 app.add_middleware(
     CORSMiddleware,
