@@ -118,6 +118,25 @@ def _get_user_role_and_groups(user: Dict[str, Any]) -> tuple[str, List[str]]:
     return role, groups
 
 
+def _is_admin_user(user: Dict[str, Any]) -> bool:
+    """檢查用戶是否是管理員"""
+    # 檢查用戶名是否為 admin
+    if user.get("username") == "admin":
+        return True
+    
+    # 檢查用戶是否擁有 admin:access 權限
+    permissions = user.get("permissions", [])
+    if isinstance(permissions, list) and "admin:access" in permissions:
+        return True
+    
+    # 檢查用戶是否屬於 admin 身分組
+    groups = user.get("groups", [])
+    if isinstance(groups, list) and "admin" in groups:
+        return True
+    
+    return False
+
+
 def _get_user_status(user: Dict[str, Any]) -> str:
     """获取用户状态"""
     return user.get("status", "active")
@@ -166,6 +185,10 @@ async def get_all_users(identity: Dict[str, Any] = Depends(require_permissions([
             if isinstance(user, dict):
                 username = user.get("username", "")
                 if not username:
+                    continue
+
+                # 跳過admin用戶，不在用戶管理界面中顯示
+                if username == "admin":
                     continue
 
                 # 为现有用户添加缺失的字段
@@ -291,7 +314,7 @@ async def update_user_role(
         user = users[user_index]
 
         # 防止修改admin帳號
-        if user.get("username") == "admin":
+        if _is_admin_user(user):
             raise HTTPException(status_code=400, detail="不能修改admin帳號的權限")
 
         # 防止管理員給自己降級（避免失去 admin:access 權限）
@@ -458,14 +481,9 @@ async def delete_user(
         if current_username == user_id:
             raise HTTPException(status_code=400, detail="不能刪除自己的賬戶")
         
-        # 防止刪除超級管理員（假設 admin:access 權限代表超級管理員）
-        role, groups = _get_user_role_and_groups(user)
-        if "admin" in role: # 這裡應該更嚴謹地檢查是否是擁有所有 admin 權限的 admin
-            # 獲取 admin 身分組的權限
-            admin_group_permissions = global_data.AUTH_CONFIG.get("groups", {}).get("admin", {}).get("permissions", [])
-            # 檢查被刪除的用戶是否擁有 admin:access 且是 admin 身分組中的用戶
-            if "admin:access" in admin_group_permissions and "admin" in groups:
-                 raise HTTPException(status_code=400, detail="不能刪除超級管理員賬戶")
+        # 防止刪除超級管理員
+        if _is_admin_user(user):
+            raise HTTPException(status_code=400, detail="不能刪除超級管理員賬戶")
 
         users.pop(user_index)
         config["users"] = users
@@ -539,7 +557,7 @@ async def update_user_groups(
         user = users[user_index]
 
         # 防止修改admin帳號
-        if user.get("username") == "admin":
+        if _is_admin_user(user):
             raise HTTPException(status_code=400, detail="不能修改admin帳號的權限")
 
         current_username = identity.get("sub", "")

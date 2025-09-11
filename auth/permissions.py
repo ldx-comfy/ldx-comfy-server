@@ -57,24 +57,35 @@ def require_permissions(required: List[str], match: str = "any"):
     校驗失敗返回 403。
     """
     def _dep(identity: Dict[str, Any] = Depends(get_current_identity)) -> Dict[str, Any]:
+        # 檢查用戶是否是admin，如果是admin直接通過所有權限檢查
+        username = identity.get("sub", "")
+        if username == "admin":
+            return identity
+
         # 從 global_data 獲取身分組配置
         groups_config = global_data.AUTH_CONFIG.get("groups", {})
-        
+
         # 獲取用戶的身分組
         user_groups = identity.get("groups", [])
         if not isinstance(user_groups, list):
             user_groups = []
-        
+
         # 收集用戶所有權限
         user_permissions = set()
-        
+
         # 從身分組獲取權限
         for group_id in user_groups:
             group_data = groups_config.get(group_id, {})
             if isinstance(group_data, dict) and "permissions" in group_data:
                 for perm in group_data["permissions"]:
                     user_permissions.add(perm)
-        
+
+        # 從直接權限字段獲取權限
+        direct_permissions = identity.get("permissions", [])
+        if isinstance(direct_permissions, list):
+            for perm in direct_permissions:
+                user_permissions.add(perm)
+
         # 從直接角色獲取權限（如果角色也代表權限，此處可保留）
         # 在新的權限模型中，建議將所有細粒度權限都定義在 groups 中，
         # roles 僅作為用戶的頂層標識，不再直接作為權限。
@@ -83,22 +94,26 @@ def require_permissions(required: List[str], match: str = "any"):
         if isinstance(user_roles, list):
             for role in user_roles:
                 user_permissions.add(role) # 可以考慮移除此行，如果 roles 不直接是 permissions
-        
+
         # 驗證權限
         def _check_permission(req_perm: str) -> bool:
             # 直接匹配
             if req_perm in user_permissions:
                 return True
-            
+
+            # 檢查用戶是否擁有通配符權限 "*" (最高權限)
+            if "*" in user_permissions:
+                return True
+
             # 通配符匹配 (例如: user:*)
             if req_perm.endswith(":*"):
                 prefix = req_perm[:-2]  # 移除 ":*"
                 for perm in user_permissions:
                     if perm.startswith(prefix + ":") and len(perm) > len(prefix) + 1: # 確保通配符匹配不是自身
                         return True
-            
+
             return False
-        
+
         req = [r for r in (required or []) if isinstance(r, str)]
         if not req:
             ok = True
@@ -106,7 +121,7 @@ def require_permissions(required: List[str], match: str = "any"):
             ok = all(_check_permission(r) for r in req)
         else:
             ok = any(_check_permission(r) for r in req)
-        
+
         if not ok:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
         return identity

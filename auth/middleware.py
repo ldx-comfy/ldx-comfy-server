@@ -122,6 +122,11 @@ class AuthMiddleware(BaseHTTPMiddleware):
         檢查用戶是否具有所需權限。
         支持通配符權限 (例如，如果 required 是 workflow:read:*, 用戶有 workflow:read:specific)
         """
+        # 檢查用戶是否是admin，如果是admin直接通過所有權限檢查
+        username = identity.get("sub", "")
+        if username == "admin":
+            return True
+
         user_permissions = identity.get("permissions", []) # JWT 中應該已經包含了所有處理後的細粒度權限
         if not isinstance(user_permissions, list):
             user_permissions = []
@@ -137,7 +142,12 @@ class AuthMiddleware(BaseHTTPMiddleware):
             if req_perm in user_permissions_set:
                 any_permission_satisfied = True
                 break
-            
+
+            # 檢查用戶是否擁有通配符權限 "*" (最高權限)
+            if "*" in user_permissions_set:
+                any_permission_satisfied = True
+                break
+
             # 通配符匹配 (例如，required: admin:users:read, user_permissions: {"admin:users:*"})
             for user_perm_with_wildcard in user_permissions_set:
                 if user_perm_with_wildcard.endswith(":*"):
@@ -147,5 +157,5 @@ class AuthMiddleware(BaseHTTPMiddleware):
                         break
             if any_permission_satisfied:
                 break
-        
+
         return any_permission_satisfied
