@@ -13,8 +13,8 @@ from comfy.get_wfs import get_wf_list, get_wf_params, get_wf, _wf_files_dir
 from starlette.concurrency import run_in_threadpool
 import global_data
 from routers.auth import get_current_identity, require_roles
-from history import save_generation_history, get_user_generation_history, get_all_generation_history, process_image_paths
-
+from history import save_generation_history, get_all_generation_history, process_image_paths
+from history import get_user_generation_history as get_user_history
 
 router = APIRouter(prefix="/api/v1/forms", tags=["表单工作流"])
 
@@ -241,7 +241,6 @@ async def get_user_generation_history(identity: Dict[str, Any] = Depends(get_cur
     logging.info("开始获取当前用户的生成历史记录")
     try:
         user_id = identity.get("sub", "unknown_user")
-        from history import get_user_generation_history as get_user_history
         history = await get_user_history(user_id)
         # 處理圖片路徑以避免重複前綴
         processed_history = process_image_paths(history)
@@ -258,7 +257,6 @@ async def get_user_generation_history_detail(execution_id: str, identity: Dict[s
     logging.info(f"开始获取执行ID '{execution_id}' 的生成历史记录详情")
     try:
         user_id = identity.get("sub", "unknown_user")
-        from history import get_user_generation_history as get_user_history
         history = await get_user_history(user_id)
         # 處理圖片路徑以避免重複前綴
         processed_history = process_image_paths(history)
@@ -304,7 +302,6 @@ async def get_any_user_generation_history_detail(execution_id: str, identity: Di
     """获取任意用户特定执行ID的生成历史记录详情（仅限管理员）"""
     logging.info(f"管理员开始获取执行ID '{execution_id}' 的生成历史记录详情")
     try:
-        from history import get_all_generation_history
         history = get_all_generation_history()
         # 處理圖片路徑以避免重複前綴
         processed_history = process_image_paths(history)

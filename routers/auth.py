@@ -287,7 +287,15 @@ async def reset_own_password(
         if config is None:
             raise HTTPException(status_code=500, detail="加载认证配置失败")
 
-        user_index = auth_config._find_user_index(config, current_username)
+        # 在本模块内查找当前用户在配置中的索引，避免访问不存在的私有成员
+        users_list = config.get("users", [])
+        if not isinstance(users_list, list):
+            users_list = []
+        user_index = next(
+            (i for i, u in enumerate(users_list)
+             if isinstance(u, dict) and u.get("username") == current_username),
+            -1
+        )
 
         if user_index == -1:
             logger.warning(f"JWT token 包含不存在的用户名: {current_username}")
@@ -295,15 +303,14 @@ async def reset_own_password(
 
         user = config["users"][user_index]
 
-        # 验证当前密码
+        # 验证当前密码（兼容明文与哈希）
         current_password_hash = user.get("password_hash")
         if not current_password_hash:
-            # 如果没有密码哈希，检查明文密码（向后兼容）
-            current_password = user.get("password")
-            if current_password is None or current_password != request.current_password:
+            # 向后兼容：检查明文密码字段
+            current_password_plain = user.get("password")
+            if current_password_plain is None or current_password_plain != request.current_password:
                 raise HTTPException(status_code=400, detail="当前密码不正确")
         else:
-            # 验证密码哈希
             if not auth_config.verify_password(request.current_password, current_password_hash):
                 raise HTTPException(status_code=400, detail="当前密码不正确")
 
@@ -333,7 +340,7 @@ async def get_all_codes(
     """
     logger.info("管理员获取所有授权码列表")
     try:
-        config = auth_config._load_json_file(auth_config._effective_config_path())
+        config = auth_config._load_json_file(auth_config._effective_config_path()) or {}
         codes = config.get("codes", [])
         # 为 CodeInfo 构造函数提供缺失的字段的默认值
         validated_codes = []
