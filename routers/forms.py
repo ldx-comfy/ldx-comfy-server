@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import uuid
+import base64
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends
 from pydantic import BaseModel, Field
 from comfy.plugins import plugin_manager
@@ -211,7 +212,10 @@ async def execute_workflow_with_form(
             "nodes": nodes_data,
             "files": [f.filename for f in files] if files else []
         }
-        
+
+        # 处理图像数据，将base64转换为文件路径
+        processed_result = _process_images_for_history(result, result["execution_id"])
+
         # 保存生成歷史（在返回結果之前）
         try:
             save_generation_history(
@@ -219,7 +223,7 @@ async def execute_workflow_with_form(
                 workflow_id=workflow_id,
                 execution_id=result["execution_id"],
                 input_params=input_params,
-                result=result
+                result=processed_result
             )
             logging.info(f"生成歷史已保存: user_id={user_id}, execution_id={result['execution_id']}")
         except Exception as e:
@@ -244,8 +248,10 @@ async def get_user_generation_history(identity: Dict[str, Any] = Depends(get_cur
         history = await get_user_history(user_id)
         # 處理圖片路徑以避免重複前綴
         processed_history = process_image_paths(history)
-        logging.info(f"成功获取用户 {user_id} 的生成历史记录，共 {len(processed_history)} 条")
-        return processed_history
+        # 转换为base64格式供前端使用
+        frontend_history = _convert_images_to_base64_for_frontend(processed_history)
+        logging.info(f"成功获取用户 {user_id} 的生成历史记录，共 {len(frontend_history)} 条")
+        return frontend_history
     except Exception as e:
         logging.error(f"获取当前用户的生成历史记录失败: {str(e)}")
         raise
@@ -260,20 +266,22 @@ async def get_user_generation_history_detail(execution_id: str, identity: Dict[s
         history = await get_user_history(user_id)
         # 處理圖片路徑以避免重複前綴
         processed_history = process_image_paths(history)
-        
+
         # 查找匹配的记录
         record = None
         for item in processed_history:
             if item.get("execution_id") == execution_id:
                 record = item
                 break
-        
+
         if record is None:
             logging.warning(f"未找到执行ID '{execution_id}' 的生成历史记录")
             raise HTTPException(status_code=404, detail=f"未找到执行ID '{execution_id}' 的生成历史记录")
-        
+
+        # 转换为base64格式供前端使用
+        frontend_record = _convert_images_to_base64_for_frontend([record])[0]
         logging.info(f"成功获取执行ID '{execution_id}' 的生成历史记录详情")
-        return record
+        return frontend_record
     except HTTPException:
         # 重新抛出HTTP异常
         raise
@@ -290,8 +298,10 @@ async def get_all_users_generation_history(identity: Dict[str, Any] = Depends(re
         history = get_all_generation_history()
         # 處理圖片路徑以避免重複前綴
         processed_history = process_image_paths(history)
-        logging.info(f"管理员成功获取所有用户的生成历史记录，共 {len(processed_history)} 条")
-        return processed_history
+        # 转换为base64格式供前端使用
+        frontend_history = _convert_images_to_base64_for_frontend(processed_history)
+        logging.info(f"管理员成功获取所有用户的生成历史记录，共 {len(frontend_history)} 条")
+        return frontend_history
     except Exception as e:
         logging.error(f"管理员获取所有用户的生成历史记录失败: {str(e)}")
         raise
@@ -305,20 +315,22 @@ async def get_any_user_generation_history_detail(execution_id: str, identity: Di
         history = get_all_generation_history()
         # 處理圖片路徑以避免重複前綴
         processed_history = process_image_paths(history)
-        
+
         # 查找匹配的记录
         record = None
         for item in processed_history:
             if item.get("execution_id") == execution_id:
                 record = item
                 break
-        
+
         if record is None:
             logging.warning(f"未找到执行ID '{execution_id}' 的生成历史记录")
             raise HTTPException(status_code=404, detail=f"未找到执行ID '{execution_id}' 的生成历史记录")
-        
+
+        # 转换为base64格式供前端使用
+        frontend_record = _convert_images_to_base64_for_frontend([record])[0]
         logging.info(f"管理员成功获取执行ID '{execution_id}' 的生成历史记录详情")
-        return record
+        return frontend_record
     except HTTPException:
         # 重新抛出HTTP异常
         raise
@@ -373,6 +385,123 @@ async def cancel_execution(execution_id: str):
     except Exception as e:
         logging.error(f"取消执行 '{execution_id}' 失败: {str(e)}")
         raise HTTPException(status_code=500, detail=f"取消执行失败: {str(e)}")
+
+
+def _process_images_for_history(result: Dict[str, Any], execution_id: str) -> Dict[str, Any]:
+    """
+    处理结果中的图像数据，将base64图像保存为文件并更新路径
+
+    Args:
+        result: 工作流执行结果
+        execution_id: 执行ID
+
+    Returns:
+        处理后的结果
+    """
+    if not result or 'images' not in result:
+        return result
+
+    processed_result = result.copy()
+    processed_images = []
+
+    for image_data in result['images']:
+        if isinstance(image_data, str):
+            if image_data.startswith('data:image/'):
+                # base64数据URL，需要保存为文件
+                try:
+                    # 解析base64数据
+                    header, base64_string = image_data.split(',', 1)
+                    image_format = header.split(';')[0].split('/')[1]  # 例如 'png', 'jpeg'
+
+                    # 解码base64
+                    image_bytes = base64.b64decode(base64_string)
+
+                    # 创建输出目录
+                    output_dir = os.path.join(global_data.COMFY_OUTPUT_DIR, 'comfy_out_image')
+                    os.makedirs(output_dir, exist_ok=True)
+
+                    # 生成文件名
+                    filename = f"{execution_id}_{uuid.uuid4().hex}.{image_format}"
+                    filepath = os.path.join(output_dir, filename)
+
+                    # 保存文件
+                    with open(filepath, 'wb') as f:
+                        f.write(image_bytes)
+
+                    # 使用相对路径存储（不带前缀）
+                    processed_images.append(filename)
+                    logging.debug(f"保存base64图像为文件: {filepath}")
+
+                except Exception as e:
+                    logging.error(f"处理base64图像失败: {e}")
+                    # 如果处理失败，保留原始数据
+                    processed_images.append(image_data)
+            else:
+                # 已经是文件路径，直接使用
+                processed_images.append(image_data)
+        else:
+            # 非字符串数据，直接使用
+            processed_images.append(image_data)
+
+    processed_result['images'] = processed_images
+    return processed_result
+
+
+def _convert_images_to_base64_for_frontend(history_records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    将历史记录中的文件路径图像转换为base64格式供前端使用
+
+    Args:
+        history_records: 历史记录列表
+
+    Returns:
+        转换后的历史记录列表
+    """
+    processed_records = []
+
+    for record in history_records:
+        processed_record = json.loads(json.dumps(record))  # 深拷贝
+
+        if 'result' in processed_record and 'images' in processed_record['result']:
+            images = processed_record['result']['images']
+            if isinstance(images, list):
+                for i, image_path in enumerate(images):
+                    if isinstance(image_path, str) and not image_path.startswith('data:'):
+                        try:
+                            # 构建完整文件路径（添加comfy_out_image前缀）
+                            full_path = os.path.join(global_data.COMFY_OUTPUT_DIR, 'comfy_out_image', image_path)
+
+                            if os.path.exists(full_path):
+                                # 读取文件并转换为base64
+                                with open(full_path, 'rb') as f:
+                                    image_data = f.read()
+
+                                # 获取文件扩展名来确定MIME类型
+                                _, ext = os.path.splitext(image_path)
+                                ext = ext.lower()
+                                if ext == '.png':
+                                    mime_type = 'image/png'
+                                elif ext in ['.jpg', '.jpeg']:
+                                    mime_type = 'image/jpeg'
+                                elif ext == '.gif':
+                                    mime_type = 'image/gif'
+                                elif ext == '.webp':
+                                    mime_type = 'image/webp'
+                                else:
+                                    mime_type = 'image/png'  # 默认
+
+                                # 转换为base64数据URL
+                                base64_data = base64.b64encode(image_data).decode('utf-8')
+                                images[i] = f"data:{mime_type};base64,{base64_data}"
+                                logging.debug(f"转换图像路径为base64: {image_path}")
+                            else:
+                                logging.warning(f"图像文件不存在: {full_path}")
+                        except Exception as e:
+                            logging.error(f"转换图像为base64失败 {image_path}: {e}")
+
+        processed_records.append(processed_record)
+
+    return processed_records
 
 
 def _get_field_type(class_type: str) -> str:

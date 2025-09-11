@@ -62,7 +62,7 @@ async def lifespan(app: FastAPI):
     # 初始化插件配置
     # 取消超时（ws_timeout/http_timeout 设为 0 或 None 表示无限等待）
     plugin_config = {
-        'server_address': '124.221.1.236:6889',
+        'server_address': '101.34.36.44:6889',
         'output_dir': global_data.COMFY_OUTPUT_DIR,
         'ws_timeout': 0,
         'http_timeout': 0,
