@@ -6,6 +6,9 @@ import os
 import pathlib
 import json
 import shutil
+import secrets
+import string
+from datetime import datetime, timezone
 
 # 注册路径
 DATA_BASE_PATH = pathlib.Path(os.environ.get("DATA_BASE_PATH", "./data"))
@@ -20,7 +23,8 @@ if not WORKFLOWS_DIR.exists():
 
 # 身分組文件路徑
 # 認證信息文件路徑 (包含用戶、身分組等配置)
-AUTH_FILE = DATA_BASE_PATH / "auth.json"
+AUTH_CONFIG_PATH = os.environ.get("AUTH_CONFIG_PATH")
+AUTH_FILE = pathlib.Path(AUTH_CONFIG_PATH) if AUTH_CONFIG_PATH and str(AUTH_CONFIG_PATH).strip() else DATA_BASE_PATH / "auth.json"
 
 # 身分組權限列表 (用於前端展示和後端權限定義參考)
 # 這裡定義的權限會被加載到 auth.json 的初始 groups 設置中
@@ -43,12 +47,36 @@ SYSTEM_PERMISSIONS = {
     "history:read:self": "查看自己的執行歷史"
 }
 
+# 生成隨機密碼（大小寫字母+數字）
+def _generate_random_password(length: int = 16) -> str:
+    alphabet = string.ascii_letters + string.digits
+    try:
+        n = max(1, int(length))
+    except Exception:
+        n = 16
+    return "".join(secrets.choice(alphabet) for _ in range(n))
+
 # 確保 AUTH_FILE 存在且初始化
 if not AUTH_FILE.exists():
+    admin_pw_env = os.environ.get("DEFAULT_ADMIN_PASSWORD")
+    admin_pw = admin_pw_env if admin_pw_env and str(admin_pw_env).strip() else _generate_random_password(16)
+
+    admin_user = {
+        "username": "admin",
+        "password": admin_pw,
+        "password_hash": "",
+        "groups": ["admin"],
+        "status": "active",
+        "email": "admin@example.com",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "last_login": datetime.now(timezone.utc).isoformat(),
+        "generation_count": 0
+    }
+
     initial_auth_data = {
         "jwt_secret": "your-jwt-secret-here-change-in-production",
         "jwt_expires_seconds": 3600,
-        "users": [],
+        "users": [admin_user],
         "codes": [],
         "groups": {
             "admin": {
@@ -73,8 +101,10 @@ if not AUTH_FILE.exists():
         },
         "default_user_groups": ["user"]
     }
+    AUTH_FILE.parent.mkdir(parents=True, exist_ok=True)
     with open(AUTH_FILE, "w", encoding="utf-8") as f:
         json.dump(initial_auth_data, f, ensure_ascii=False, indent=2)
+    print(f"系統初始化時生成的默認 admin 用戶密碼: {admin_pw}")
 
 # 新增一个用于从 AUTH_FILE 读取 groups 的全局变量
 AUTH_CONFIG = {}
@@ -84,6 +114,40 @@ def load_auth_config():
         with open(AUTH_FILE, "r", encoding="utf-8") as f:
             AUTH_CONFIG = json.load(f)
 load_auth_config() # 服務啟動時加載
+
+# 確保默認 admin 存在（若無）
+def ensure_default_admin():
+    try:
+        cfg = AUTH_CONFIG if isinstance(AUTH_CONFIG, dict) else {}
+        users = cfg.get("users", [])
+        if not isinstance(users, list):
+            users = []
+        has_admin = any(isinstance(u, dict) and u.get("username") == "admin" for u in users)
+        if not has_admin:
+            admin_pw_env = os.environ.get("DEFAULT_ADMIN_PASSWORD")
+            admin_pw = admin_pw_env if admin_pw_env and str(admin_pw_env).strip() else _generate_random_password(16)
+            admin_user = {
+                "username": "admin",
+                "password": admin_pw,
+                "password_hash": "",
+                "groups": ["admin"],
+                "status": "active",
+                "email": "admin@example.com",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "last_login": datetime.now(timezone.utc).isoformat(),
+                "generation_count": 0
+            }
+            users.append(admin_user)
+            cfg["users"] = users
+            AUTH_FILE.parent.mkdir(parents=True, exist_ok=True)
+            with open(AUTH_FILE, "w", encoding="utf-8") as f:
+                json.dump(cfg, f, ensure_ascii=False, indent=2)
+            print(f"系統初始化時生成的默認 admin 用戶密碼: {admin_pw}")
+            load_auth_config()
+    except Exception as e:
+        print(f"警告: 自動注入默認 admin 失敗: {e}")
+
+ensure_default_admin()
 
 # 修改 permissions.py 以使用 AUTH_CONFIG.get("groups", {})
 # 而不是直接讀取文件，會更高效和統一

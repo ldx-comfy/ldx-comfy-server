@@ -8,7 +8,6 @@ Auth configuration loader and helpers.
 - Codes.expires_at accepts ISO-8601 formats with 'Z' or timezone offset; naive datetime is treated as local time.
 - On missing/invalid config file: log WARNING, use empty users/codes and default JWT settings.
 - RBAC extensions: groups_map/default_user_groups; users/codes may carry roles/groups
-- Default admin injection: if no 'admin' user exists, inject an in-memory admin with random password
 """
 
 from __future__ import annotations
@@ -38,7 +37,10 @@ _CONFIG = global_data.AUTH_CONFIG
 
 
 def _effective_config_path() -> str:
-    """返回有效的配置路徑 (直接使用 global_data.AUTH_FILE)。"""
+    """返回有效的配置路徑，優先 ENV AUTH_CONFIG_PATH，其次 global_data.AUTH_FILE。"""
+    env_path = os.environ.get("AUTH_CONFIG_PATH")
+    if env_path and str(env_path).strip():
+        return str(env_path)
     return str(global_data.AUTH_FILE)
 
 
@@ -289,91 +291,14 @@ def _maybe_persist_admin_to_json(cfg_path: str, admin_user: Dict[str, Any]) -> N
 
 def _init_config() -> None:
     """
-    初始化配置。現在主要從 global_data.AUTH_CONFIG 加載。
-    如果 global_data.AUTH_CONFIG 為空 (auth.json 不存在或加載失敗)，則生成默認配置。
+    初始化配置：以 global_data.AUTH_CONFIG 為單一來源，不再在此處創建/持久化默認 auth.json。
+    僅做環境變量覆蓋與結構/類型規整。
     """
-    global _CONFIG # 確保我們修改的是這個模塊的 _CONFIG 引用
-    # 如果 global_data 中的配置為空，說明 auth.json 未成功加載
-    # 或者如果 users 數組為空，也需要創建默認的 admin 用戶
-    if not global_data.AUTH_CONFIG or not global_data.AUTH_CONFIG.get("users"):
-        logger.warning("global_data.AUTH_CONFIG is empty, creating default auth config for auth/config.py")
-        admin_pw = generate_random_password(16)
-        
-        default_config = {
-            "jwt_secret": "your-jwt-secret-here-change-in-production",
-            "jwt_expires_seconds": _DEFAULT_EXPIRES_SECONDS,
-            "users": [
-                {
-                    "username": "admin",
-                    "password_hash": hash_password(admin_pw),
-                    "permissions": ["*"], # 最高權限：所有權限的通配符，不屬於任何身分組
-                    "email": "admin@example.com",
-                    "status": "active",
-                    "created_at": datetime.now(timezone.utc).isoformat(),
-                    "last_login": datetime.now(timezone.utc).isoformat(),
-                    "generation_count": 0
-                }
-            ],
-            "codes": [],
-            "groups": { # 新的 groups 結構
-                "admin": {
-                    "name": "Admin Group",
-                    "description": "擁有所有管理面板權限",
-                    "permissions": list(global_data.SYSTEM_PERMISSIONS.keys()),
-                    "level": 100
-                },
-                "user": {
-                    "name": "User Group",
-                    "description": "普通用戶，具備基本操作權限",
-                    "permissions": [
-                        "workflow:read:*",
-                        "workflow:execute:*",
-                        "user:read:self",
-                        "user:update:self",
-                        "user:reset_password:self",
-                        "history:read:self"
-                    ],
-                    "level": 10
-                }
-            },
-            "default_user_groups": ["user"]
-        }
-        _CONFIG.update(default_config) # 更新到局部的 _CONFIG
-        print(f"系統初始化時生成的默認 admin 用戶密碼: {admin_pw}")
-        logger.warning(
-            "Generated in-memory default admin user with random password: %s.\n"
-            "This configuration is not persisted to disk. Please configure auth.json properly.",
-            admin_pw
-        )
-    else:
-        _CONFIG.update(global_data.AUTH_CONFIG) # 從 global_data 加載
-        
-        # 檢查 users 數組是否為空
-        if not _CONFIG.get("users"):
-            # 添加默認的 admin 用戶
-            admin_pw = generate_random_password(16)
-            _CONFIG["users"] = [
-                {
-                    "username": "admin",
-                    "password_hash": hash_password(admin_pw),
-                    "permissions": ["*"], # 最高權限：所有權限的通配符，不屬於任何身分組
-                    "email": "admin@example.com",
-                    "status": "active",
-                    "created_at": datetime.now(timezone.utc).isoformat(),
-                    "last_login": datetime.now(timezone.utc).isoformat(),
-                    "generation_count": 0
-                }
-            ]
-            
-            # 輸出密碼
-            print(f"系統初始化時生成的默認 admin 用戶密碼: {admin_pw}")
-            logger.warning(
-                "Generated in-memory default admin user with random password: %s.\n"
-                "This configuration is not persisted to disk. Please configure auth.json properly.",
-                admin_pw
-            )
+    global _CONFIG
+    # 將 _CONFIG 指向最新的全局配置（若不可用則為空字典）
+    _CONFIG = global_data.AUTH_CONFIG if isinstance(global_data.AUTH_CONFIG, dict) else {}
 
-    # JWT secret 和 expires_seconds 仍然需要從這裡處理環境變量覆蓋
+    # 環境變量覆蓋
     _CONFIG["jwt_secret"] = os.environ.get(_ENV_JWT_SECRET) or _CONFIG.get("jwt_secret", _DEFAULT_SECRET) or _DEFAULT_SECRET
     try:
         _CONFIG["jwt_expires_seconds"] = int(_CONFIG.get("jwt_expires_seconds", _DEFAULT_EXPIRES_SECONDS))
@@ -381,13 +306,22 @@ def _init_config() -> None:
         logger.warning("Invalid jwt_expires_seconds in config; using default %d", _DEFAULT_EXPIRES_SECONDS)
         _CONFIG["jwt_expires_seconds"] = _DEFAULT_EXPIRES_SECONDS
 
-    # 確保 users, codes, groups, default_user_groups 都是列表或字典
-    _CONFIG["users"] = _CONFIG.get("users", []) if isinstance(_CONFIG.get("users"), list) else []
-    _CONFIG["codes"] = _CONFIG.get("codes", []) if isinstance(_CONFIG.get("codes"), list) else []
-    _CONFIG["groups"] = _CONFIG.get("groups", {}) if isinstance(_CONFIG.get("groups"), dict) else {}
-    _CONFIG["default_user_groups"] = _CONFIG.get("default_user_groups", []) if isinstance(_CONFIG.get("default_user_groups"), list) else []
+    # 類型規整
+    if not isinstance(_CONFIG.get("users"), list):
+        _CONFIG["users"] = []
+    if not isinstance(_CONFIG.get("codes"), list):
+        _CONFIG["codes"] = []
+    if not isinstance(_CONFIG.get("groups"), dict):
+        _CONFIG["groups"] = {}
+    if not isinstance(_CONFIG.get("default_user_groups"), list):
+        _CONFIG["default_user_groups"] = []
 
-    logger.debug("Auth config fully loaded. Effective users count: %d", len(_CONFIG["users"]))
+    logger.debug(
+        "Auth config loaded from global_data. users=%d, codes=%d, groups=%d",
+        len(_CONFIG["users"]),
+        len(_CONFIG["codes"]),
+        len(_CONFIG["groups"]),
+    )
 
 
 def get_users() -> List[Dict[str, Any]]:
@@ -479,6 +413,7 @@ def check_user_permission(user_groups: List[str], required_permission: str) -> b
 
 def _save_auth_config(config: Dict[str, Any]) -> None:
     """保存認證配置"""
+    global _CONFIG
     path = _effective_config_path()
     try:
         # 創建備份
@@ -512,9 +447,10 @@ def _save_auth_config(config: Dict[str, Any]) -> None:
             f.write("\n")
         logger.info(f"_save_auth_config: 認證配置已保存到 {path}")
         
-        # 更新 global_data 中的 AUTH_CONFIG，保持一致性
+        # 更新 global_data 中的 AUTH_CONFIG，保持一致性，並同步本模塊快照
         global_data.load_auth_config()
-        logger.info(f"_save_auth_config: global_data.AUTH_CONFIG 已重新加載")
+        _CONFIG = global_data.AUTH_CONFIG
+        logger.info(f"_save_auth_config: global_data.AUTH_CONFIG 已重新加載並同步到 auth.config._CONFIG")
         
     except Exception as e:
         logger.error(f"保存認證配置失敗: {e}")
