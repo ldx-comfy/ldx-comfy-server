@@ -426,9 +426,12 @@ async def create_user(
             new_user["groups"] = request.groups
             new_user.pop("roles", None) # 設置了身分組，移除 roles 字段
         else:
-            # 如果沒有提供身分組，則將角色設置為普通用戶，並從 default_user_groups 中獲取身分組
-            new_user["roles"] = ["user"]
-            new_user["groups"] = global_data.AUTH_CONFIG.get("default_user_groups", [])
+            # 如果沒有提供身分組，則從 default_user_groups 中獲取身分組
+            # 如果 default_user_groups 也為空，則不設置身分組
+            default_groups = global_data.AUTH_CONFIG.get("default_user_groups", [])
+            if default_groups:
+                new_user["groups"] = default_groups
+            # 不再設置 roles 字段，因為現在主要通過 groups 管理權限
 
         users.append(new_user)
         config["users"] = users
@@ -463,33 +466,55 @@ async def delete_user(
     identity: Dict[str, Any] = Depends(require_permissions(["admin:users:manage"])) # 使用細粒度權限
 ):
     """刪除用戶（僅管理員）"""
-    logging.info(f"管理員刪除用戶: {user_id}")
+    current_username = identity.get("sub", "")
+    logging.info(f"管理員 {current_username} 嘗試刪除用戶: {user_id}")
     try:
         if not user_id or not isinstance(user_id, str) or len(user_id.strip()) == 0:
+            logging.warning(f"無效的用戶名: {user_id}")
             raise HTTPException(status_code=400, detail="無效的用戶名")
 
         config = _load_auth_config_from_global()
         users = config.get("users", [])
+        logging.debug(f"當前用戶列表: {[u.get('username') for u in users if isinstance(u, dict)]}")
+
         user_index = _find_user_index(config, user_id)
+        logging.debug(f"用戶 {user_id} 的索引: {user_index}")
 
         if user_index == -1:
+            logging.warning(f"用戶 {user_id} 不存在")
             raise HTTPException(status_code=404, detail=f"用戶 {user_id} 不存在")
 
         user = users[user_index]
+        logging.debug(f"找到用戶: {user.get('username')}")
 
-        current_username = identity.get("sub", "")
         if current_username == user_id:
+            logging.warning(f"管理員 {current_username} 嘗試刪除自己的賬戶")
             raise HTTPException(status_code=400, detail="不能刪除自己的賬戶")
-        
+
         # 防止刪除超級管理員
         if _is_admin_user(user):
+            logging.warning(f"嘗試刪除超級管理員賬戶: {user_id}")
             raise HTTPException(status_code=400, detail="不能刪除超級管理員賬戶")
 
-        users.pop(user_index)
+        # 執行刪除
+        deleted_user = users.pop(user_index)
         config["users"] = users
-        _save_auth_config_to_global(config)
+        logging.info(f"從內存中移除了用戶 {user_id}")
 
-        logging.info(f"用戶 {user_id} 刪除成功")
+        # 保存配置
+        _save_auth_config_to_global(config)
+        logging.info(f"用戶 {user_id} 刪除成功，已保存到配置文件")
+
+        # 驗證刪除是否成功
+        updated_config = _load_auth_config_from_global()
+        updated_users = updated_config.get("users", [])
+        remaining_usernames = [u.get('username') for u in updated_users if isinstance(u, dict)]
+        if user_id in remaining_usernames:
+            logging.error(f"用戶 {user_id} 刪除失敗，用戶仍然存在")
+            raise HTTPException(status_code=500, detail="刪除用戶失敗，用戶仍然存在")
+        else:
+            logging.info(f"驗證成功：用戶 {user_id} 已從配置文件中移除")
+
         return {"message": f"用戶 {user_id} 已刪除"}
 
     except HTTPException:

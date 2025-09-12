@@ -78,7 +78,7 @@ async def lifespan(app: FastAPI):
     logger.info("插件系統清理完成")
 
 # 創建FastAPI應用
-app = include_routers(FastAPI(lifespan=lifespan))
+app = include_routers(FastAPI(lifespan=lifespan, debug=True))
 
 # 中間件：記錄請求和響應信息
 async def log_requests(request: Request, call_next):

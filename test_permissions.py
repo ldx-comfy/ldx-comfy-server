@@ -1,86 +1,132 @@
+#!/usr/bin/env python3
 """
-權限系統測試腳本
-用於測試簡化後的權限系統是否正常工作
+測試權限功能
 """
 
 import json
 import requests
-import time
+import global_data
 
 # 服務器地址
-BASE_URL = "http://localhost:800"
+BASE_URL = "http://localhost:8000"
 
-def test_permissions():
-    """測試權限系統"""
-    print("開始測試權限系統...")
-    
-    # 1. 獲取管理員令牌
-    print("\n1. 獲取管理員令牌...")
-    admin_login_data = {
-        "username": "admin",
-        "password": "admin123"  # 這應該是實際的管理員密碼
+def load_auth_config():
+    """加載認證配置"""
+    global_data.load_auth_config()
+    return global_data.AUTH_CONFIG
+
+def get_user_token(username, password):
+    """獲取用戶令牌"""
+    login_data = {
+        "username": username,
+        "password": password
     }
     
     try:
-        response = requests.post(f"{BASE_URL}/api/v1/auth/login", json=admin_login_data)
+        response = requests.post(f"{BASE_URL}/api/v1/auth/login", json=login_data)
         if response.status_code == 200:
-            admin_token = response.json()["access_token"]
-            print(f"管理員令牌獲取成功: {admin_token[:20]}...")
+            token_data = response.json()
+            return token_data.get("access_token")
         else:
-            print(f"管理員令牌獲取失敗: {response.status_code} {response.text}")
-            return
+            print(f"❌ 登錄失敗: {response.status_code} {response.text}")
+            return None
     except Exception as e:
-        print(f"管理員令牌獲取失敗: {e}")
-        return
+        print(f"❌ 登錄請求失敗: {e}")
+        return None
+
+def test_admin_permissions(token):
+    """測試管理員權限"""
+    if not token:
+        print("❌ 無效的令牌")
+        return False
     
-    # 2. 獲取所有身分組
-    print("\n2. 獲取所有身分組...")
-    headers = {"Authorization": f"Bearer {admin_token}"}
+    headers = {
+        "Authorization": f"Bearer {token}"
+    }
+    
     try:
-        response = requests.get(f"{BASE_URL}/api/v1/admin/groups", headers=headers)
+        # 測試管理員專屬端點
+        response = requests.get(f"{BASE_URL}/api/v1/auth/admin/ping", headers=headers)
         if response.status_code == 200:
-            groups = response.json()
-            print(f"身分組獲取成功，共 {len(groups)} 個身分組")
-            for group in groups:
-                print(f"  - {group['name']} ({group['id']}): {len(group['permissions'])} 個權限")
+            print("✅ 管理員權限測試通過")
+            return True
         else:
-            print(f"身分組獲取失敗: {response.status_code} {response.text}")
+            print(f"❌ 管理員權限測試失敗: {response.status_code} {response.text}")
+            return False
     except Exception as e:
-        print(f"身分組獲取失敗: {e}")
+        print(f"❌ 管理員權限測試請求失敗: {e}")
+        return False
+
+def test_user_permissions(token):
+    """測試普通用戶權限"""
+    if not token:
+        print("❌ 無效的令牌")
+        return False
     
-    # 3. 獲取系統權限列表
-    print("\n3. 獲取系統權限列表...")
+    headers = {
+        "Authorization": f"Bearer {token}"
+    }
+    
     try:
-        response = requests.get(f"{BASE_URL}/api/v1/admin/groups/permissions/list", headers=headers)
+        # 測試普通用戶端點
+        response = requests.get(f"{BASE_URL}/api/v1/auth/me", headers=headers)
         if response.status_code == 200:
-            permissions = response.json()
-            print(f"系統權限列表獲取成功，共 {len(permissions)} 個權限")
-            # 顯示前10個權限
-            for perm in permissions[:10]:
-                print(f"  - {perm['name']} ({perm['id']})")
-            if len(permissions) > 10:
-                print(f"  ... 還有 {len(permissions) - 10} 個權限")
+            print("✅ 普通用戶權限測試通過")
+            return True
         else:
-            print(f"系統權限列表獲取失敗: {response.status_code} {response.text}")
+            print(f"❌ 普通用戶權限測試失敗: {response.status_code} {response.text}")
+            return False
     except Exception as e:
-        print(f"系統權限列表獲取失敗: {e}")
+        print(f"❌ 普通用戶權限測試請求失敗: {e}")
+        return False
+
+def test_insufficient_permissions(token):
+    """測試權限不足的情況"""
+    if not token:
+        print("❌ 無效的令牌")
+        return False
     
-    # 4. 獲取當前用戶權限
-    print("\n4. 獲取當前用戶權限...")
+    headers = {
+        "Authorization": f"Bearer {token}"
+    }
+    
     try:
-        response = requests.get(f"{BASE_URL}/api/v1/admin/groups/my/permissions", headers=headers)
-        if response.status_code == 200:
-            my_permissions = response.json()
-            print(f"當前用戶權限獲取成功，共 {len(my_permissions)} 個權限")
-            # 顯示所有權限
-            for perm in my_permissions:
-                print(f"  - {perm['name']} ({perm['id']})")
+        # 測試管理員專屬端點（普通用戶應該無權限）
+        response = requests.get(f"{BASE_URL}/api/v1/auth/admin/ping", headers=headers)
+        if response.status_code == 403:
+            print("✅ 權限不足測試通過（正確返回403）")
+            return True
         else:
-            print(f"當前用戶權限獲取失敗: {response.status_code} {response.text}")
+            print(f"❌ 權限不足測試失敗: 應該返回403但返回了 {response.status_code}")
+            return False
     except Exception as e:
-        print(f"當前用戶權限獲取失敗: {e}")
+        print(f"❌ 權限不足測試請求失敗: {e}")
+        return False
+
+def main():
+    """主函數"""
+    print("=== 測試權限功能 ===")
     
-    print("\n權限系統測試完成!")
+    # 加載配置
+    config = load_auth_config()
+    
+    # 獲取admin令牌
+    admin_token = get_user_token("admin", "ldx123456")  # 根據實際密碼修改
+    
+    # 測試admin權限
+    if admin_token:
+        test_admin_permissions(admin_token)
+    
+    # 創建測試用戶（如果還不存在）
+    # 這裡假設測試用戶已經存在，實際情況可能需要先創建
+    
+    # 獲取測試用戶令牌
+    test_token = get_user_token("test", "testpassword123")  # 根據實際密碼修改
+    
+    # 測試普通用戶權限
+    if test_token:
+        test_user_permissions(test_token)
+        test_insufficient_permissions(test_token)
 
 if __name__ == "__main__":
-    test_permissions()
+    main()

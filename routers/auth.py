@@ -152,22 +152,39 @@ async def password_login(body: LoginRequest) -> TokenResponse:
     用戶名+密碼登錄（SHA256哈希驗證）
     支持 password_hash 字段的哈希密碼驗證
     """
+    logger.info(f"用戶 {body.username} 嘗試登錄")
     user = auth_config.find_user(body.username)
     if not user: # user 為 None 表示未找到
+        logger.warning(f"用戶 {body.username} 不存在")
         raise _unauthorized("Invalid credentials")
+
+    logger.debug(f"找到用戶: {user.get('username')}")
+    logger.debug(f"用戶狀態: {user.get('status')}")
+
+    # 檢查用戶狀態
+    if user.get("status") != "active":
+        logger.warning(f"用戶 {body.username} 狀態為 {user.get('status')}，拒絕登錄")
+        raise _unauthorized("Account is not active")
 
     # 優先檢查哈希密碼字段
     stored_hash = user.get("password_hash")
     if stored_hash:
+        logger.debug(f"驗證哈希密碼: 存儲的哈希={stored_hash}")
+        logger.debug(f"輸入密碼哈希: {auth_config.hash_password(body.password)}")
         if not auth_config.verify_password(body.password, stored_hash):
+            logger.warning(f"用戶 {body.username} 密碼驗證失敗")
             raise _unauthorized("Invalid credentials")
+        logger.debug(f"用戶 {body.username} 密碼驗證成功")
     else:
         # 向後兼容：檢查明文密碼字段
         stored_password = user.get("password")
         if stored_password is None or stored_password != body.password:
+            logger.warning(f"用戶 {body.username} 明文密碼驗證失敗")
             raise _unauthorized("Invalid credentials")
+        logger.debug(f"用戶 {body.username} 明文密碼驗證成功")
 
     roles, groups, permissions_from_config = auth_config.resolve_effective_roles(user) # 獲取 permissions
+    logger.info(f"用戶 {body.username} 登錄成功，權限: {permissions_from_config}")
     return _issue_token(subject=body.username, login_mode="password", roles=roles, groups=groups, permissions=permissions_from_config)
 
 
@@ -220,6 +237,7 @@ async def admin_ping(identity: Dict[str, Any] = Depends(require_permissions(["ad
     return {"ok": True, "sub": identity.get("sub")}
 
 @router.put("/me/reset-password")
+@router.put("/me/reset-password/") # 新增帶斜線的路由，以便同時匹配兩種形式
 async def reset_own_password(
     request: ResetOwnPasswordRequest,
     identity: Dict[str, Any] = Depends(get_current_identity)
@@ -230,22 +248,27 @@ async def reset_own_password(
     try:
         # 驗證新密碼必須提供且長度>=6
         if not request.new_password or len(request.new_password) < 6:
+            logger.warning(f"用戶 {current_username} 新密碼長度不足: {len(request.new_password or '')}")
             raise HTTPException(status_code=400, detail="新密碼長度至少為6位")
         new_pw = request.new_password
+        logger.debug(f"用戶 {current_username} 新密碼長度驗證通過")
 
         # 獲取當前用戶
         if not current_username:
+            logger.warning("無法從JWT token中獲取用戶名")
             raise HTTPException(status_code=400, detail="無法識別當前用戶")
 
         # 驗證用戶名是否有效（防止使用無效的JWT token）
         if not isinstance(current_username, str) or len(current_username.strip()) == 0:
+            logger.warning(f"無效的用戶名: {current_username}")
             raise HTTPException(status_code=400, detail="無效的用戶名")
 
         config = global_data.AUTH_CONFIG # 直接從全局配置獲取
         users_list = config.get("users", [])
         if not isinstance(users_list, list):
             users_list = []
-        
+        logger.debug(f"找到 {len(users_list)} 個用戶")
+
         user_index = next(
             (i for i, u in enumerate(users_list)
              if isinstance(u, dict) and u.get("username") == current_username),
@@ -257,6 +280,7 @@ async def reset_own_password(
             raise HTTPException(status_code=401, detail="認證令牌無效，請重新登錄")
 
         user = config["users"][user_index]
+        logger.debug(f"找到用戶: {user.get('username')}")
 
         # 驗證當前密碼（兼容明文與哈希）
         current_password_hash = user.get("password_hash")
@@ -264,17 +288,25 @@ async def reset_own_password(
             # 向後兼容：檢查明文密碼字段
             current_password_plain = user.get("password")
             if current_password_plain is None or current_password_plain != request.current_password:
+                logger.warning(f"用戶 {current_username} 明文密碼驗證失敗")
                 raise HTTPException(status_code=400, detail="當前密碼不正確")
+            logger.debug(f"用戶 {current_username} 明文密碼驗證成功")
         else:
+            logger.debug(f"用戶 {current_username} 存儲的哈希: {current_password_hash}")
+            logger.debug(f"用戶 {current_username} 輸入密碼哈希: {auth_config.hash_password(request.current_password)}")
             if not auth_config.verify_password(request.current_password, current_password_hash):
+                logger.warning(f"用戶 {current_username} 哈希密碼驗證失敗")
                 raise HTTPException(status_code=400, detail="當前密碼不正確")
+            logger.debug(f"用戶 {current_username} 哈希密碼驗證成功")
 
         # 更新密碼
+        old_hash = user["password_hash"]
         user["password_hash"] = auth_config.hash_password(new_pw)
-    
+        logger.debug(f"用戶 {current_username} 密碼哈希已更新: {old_hash} -> {user['password_hash']}")
+
         auth_config._save_auth_config(config) # 保存整個配置
-    
-        logger.info(f"用戶 {current_username} 密碼重置成功")
+        logger.info(f"用戶 {current_username} 密碼重置成功，已保存到配置文件")
+
         return {"message": "密碼已重置"}
 
     except HTTPException:

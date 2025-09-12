@@ -92,8 +92,6 @@ def _get_admin_groups(user_groups: List[str]) -> List[str]:
     # 管理員級別權限模式，用於判斷身分組是否為管理員性質
     admin_permission_patterns = [
         "admin:", # 匹配所有 admin: 開頭的權限
-        "workflow:read:*", # 示例性地包含一些管理員常有的通配符權限
-        "workflow:execute:*" # 示例性地包含一些管理員常有的通配符權限
     ]
 
     for group_id in user_groups:
@@ -394,7 +392,9 @@ def _init_config() -> None:
 
 def get_users() -> List[Dict[str, Any]]:
     """返回已配置用戶列表的副本。"""
-    return list(_CONFIG.get("users", []))
+    # 直接從 global_data.AUTH_CONFIG 獲取最新的用戶列表
+    users = global_data.AUTH_CONFIG.get("users", [])
+    return list(users) if isinstance(users, list) else []
 
 
 def get_codes() -> List[Dict[str, Any]]:
@@ -406,7 +406,10 @@ def find_user(username: str) -> Optional[Dict[str, Any]]:
     """通過用戶名查找用戶。"""
     if not username:
         return None
-    users = get_users()
+    # 直接從 global_data.AUTH_CONFIG 獲取最新的用戶列表
+    users = global_data.AUTH_CONFIG.get("users", [])
+    if not isinstance(users, list):
+        users = []
     for u in users:
         if isinstance(u, dict) and u.get("username") == username:
             return u
@@ -485,30 +488,34 @@ def _save_auth_config(config: Dict[str, Any]) -> None:
             shutil.copy2(path, backup_path)
             logger.debug(f"_save_auth_config: 創建備份文件: {backup_path}")
 
-
-        # 保存新配置
-        # 如果 auth.json 文件中的 users 數組為空，則保留現有的 users 數組
+        # 讀取現有配置
         existing_config = {}
-        try:
-            if os.path.exists(path):
+        if os.path.exists(path):
+            try:
                 with open(path, "r", encoding="utf-8") as f:
                     existing_config = json.load(f)
-        except Exception:
-            pass
-        
-        # 如果現有的配置中有 users 且不為空，則保留現有的 users
-        if existing_config.get("users"):
-            config["users"] = existing_config["users"]
-        
+            except Exception as e:
+                logger.warning(f"_save_auth_config: 讀取現有配置失敗: {e}")
+
+        # 合併配置：保留現有配置中重要的字段（如 users, codes），除非新配置明確提供了這些字段
+        merged_config = existing_config.copy()
+        merged_config.update(config)
+
+        # 特別處理 users 和 codes 字段
+        if "users" not in config and "users" in existing_config:
+            merged_config["users"] = existing_config["users"]
+        if "codes" not in config and "codes" in existing_config:
+            merged_config["codes"] = existing_config["codes"]
+
         with open(path, "w", encoding="utf-8") as f:
-            json.dump(config, f, ensure_ascii=True, indent=2) # 確保 ASCII，因為這是配置文件
+            json.dump(merged_config, f, ensure_ascii=True, indent=2)
             f.write("\n")
         logger.info(f"_save_auth_config: 認證配置已保存到 {path}")
         
         # 更新 global_data 中的 AUTH_CONFIG，保持一致性
         global_data.load_auth_config()
-        logger.info(f"_save_auth_config: global_data.AUTH_CONFIG 已重新加載: {global_data.AUTH_CONFIG.get('users', [])[:1]}...")
-
+        logger.info(f"_save_auth_config: global_data.AUTH_CONFIG 已重新加載")
+        
     except Exception as e:
         logger.error(f"保存認證配置失敗: {e}")
         raise Exception(f"保存認證配置失敗: {str(e)}")

@@ -67,7 +67,16 @@ class AuthMiddleware(BaseHTTPMiddleware):
         logger.debug(f"AuthMiddleware: 收到請求: {method} {path}")
 
         identity: Optional[Dict[str, Any]] = None
+        # 優先從 Authorization 頭部獲取 JWT
         authorization = request.headers.get("Authorization")
+        
+        # 如果 Authorization 頭部不存在，嘗試從 Cookie 中獲取 auth_token
+        if not authorization:
+            auth_token_from_cookie = request.cookies.get("auth_token")
+            if auth_token_from_cookie:
+                authorization = f"Bearer {auth_token_from_cookie}"
+                logger.debug("AuthMiddleware: 從 Cookie 中提取到 auth_token，構造 Authorization header")
+                
         if authorization:
             try:
                 # 使用 get_current_identity 嘗試解析 JWT
@@ -125,6 +134,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         # 檢查用戶是否是admin，如果是admin直接通過所有權限檢查
         username = identity.get("sub", "")
         if username == "admin":
+            logger.debug(f"AuthMiddleware: 用戶 {username} 是管理員，跳過權限檢查")
             return True
 
         user_permissions = identity.get("permissions", []) # JWT 中應該已經包含了所有處理後的細粒度權限
@@ -132,19 +142,27 @@ class AuthMiddleware(BaseHTTPMiddleware):
             user_permissions = []
         user_permissions_set = set(user_permissions)
 
+        logger.debug(f"AuthMiddleware: 用戶 {username} 的權限: {user_permissions}")
+        logger.debug(f"AuthMiddleware: 需要的權限: {required_permissions}")
+
         if not required_permissions: # 如果 required_permissions 為空列表，表示只需要身份驗證，不需要特定權限
+            logger.debug(f"AuthMiddleware: 只需要身份驗證，用戶 {username} 已通過")
             return True
 
         #檢查是否含有任一權限
         any_permission_satisfied = False
         for req_perm in required_permissions:
+            logger.debug(f"AuthMiddleware: 檢查權限 {req_perm}")
+
             # 直接匹配 (例如，required: admin:users:read, user_permissions: {"admin:users:read"})
             if req_perm in user_permissions_set:
+                logger.debug(f"AuthMiddleware: 直接匹配權限 {req_perm}")
                 any_permission_satisfied = True
                 break
 
             # 檢查用戶是否擁有通配符權限 "*" (最高權限)
             if "*" in user_permissions_set:
+                logger.debug(f"AuthMiddleware: 用戶擁有通配符權限 '*'，匹配 {req_perm}")
                 any_permission_satisfied = True
                 break
 
@@ -153,9 +171,13 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 if user_perm_with_wildcard.endswith(":*"):
                     wildcard_prefix = user_perm_with_wildcard[:-2] + ":"
                     if req_perm.startswith(wildcard_prefix):
+                        logger.debug(f"AuthMiddleware: 通配符匹配 {user_perm_with_wildcard} 匹配 {req_perm}")
                         any_permission_satisfied = True
                         break
             if any_permission_satisfied:
                 break
+
+        if not any_permission_satisfied:
+            logger.warning(f"AuthMiddleware: 用戶 {username} 權限不足 - 擁有權限: {user_permissions}, 需要權限: {required_permissions}")
 
         return any_permission_satisfied

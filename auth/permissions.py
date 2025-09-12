@@ -10,7 +10,9 @@ from fastapi import Depends, HTTPException, status, Header
 from auth import config as auth_config
 from auth import jwt as jwt_lib
 import global_data
+import logging
 
+logger = logging.getLogger(__name__)
 
 def _unauthorized(detail: str) -> HTTPException:
     return HTTPException(
@@ -45,8 +47,9 @@ def get_current_identity(authorization: Optional[str] = Header(None)) -> Dict[st
         if "sub" not in claims or "exp" not in claims:
             raise ValueError("Invalid claims")
         return claims
-    except ValueError as e:
-        raise _unauthorized(str(e))
+    except Exception as e: # 捕獲更廣泛的異常以記錄
+        logger.warning(f"get_current_identity: JWT 解碼失敗，錯誤類型: {type(e).__name__}, 內容: {e}") # 更詳細的日誌
+        raise _unauthorized(str(e)) # 重新拋出 401 異常帶有通用信息
 
 
 def require_permissions(required: List[str], match: str = "any"):
