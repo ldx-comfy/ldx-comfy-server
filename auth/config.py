@@ -234,13 +234,18 @@ def is_code_expired(expires_at: str) -> bool:
 def _persist_admin_credentials_file(username: str, password: str, out_path: str) -> None:
     """
     將管理員憑據以 JSON 格式寫入 out_path，並設置文件權限為 0600。盡力而為。
+    同時寫入 password_hash 字段，避免僅以明文保存初始密碼。
     """
     try:
         os.makedirs(os.path.dirname(out_path), exist_ok=True)
     except Exception:
         # 如果目錄名為空或無法創建，則忽略
         pass
-    data = {"username": username, "password": password}
+    data = {
+        "username": username,
+        "password": password,
+        "password_hash": hash_password(password),
+    }
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=True, indent=2) # 確保 ASCII，因為這是配置文件
         f.write("\n")
@@ -271,7 +276,14 @@ def _maybe_persist_admin_to_json(cfg_path: str, admin_user: Dict[str, Any]) -> N
                 return
         else:
             users = []
-        users.append(admin_user)
+        # 確保以哈希形式持久化 admin 的密碼
+        admin_user_to_store = dict(admin_user) if isinstance(admin_user, dict) else {}
+        if isinstance(admin_user_to_store, dict):
+            pw_plain = admin_user_to_store.get("password")
+            if not admin_user_to_store.get("password_hash") and isinstance(pw_plain, str) and pw_plain:
+                admin_user_to_store["password_hash"] = hash_password(pw_plain)
+                admin_user_to_store.pop("password", None)
+        users.append(admin_user_to_store)
         orig["users"] = users
         # 備份
         bak = cfg_path + ".bak"

@@ -8,6 +8,7 @@ import json
 import shutil
 import secrets
 import string
+import hashlib
 from datetime import datetime, timezone
 
 # 注册路径
@@ -56,6 +57,13 @@ def _generate_random_password(length: int = 16) -> str:
         n = 16
     return "".join(secrets.choice(alphabet) for _ in range(n))
 
+# 與 auth.config.hash_password 保持一致的哈希函數（避免循環導入）
+def _hash_password(password: str) -> str:
+    if not password:
+        return ""
+    salted_password = password + "comfyui_auth_salt"
+    return hashlib.sha256(salted_password.encode("utf-8")).hexdigest()
+
 # 確保 AUTH_FILE 存在且初始化
 if not AUTH_FILE.exists():
     admin_pw_env = os.environ.get("DEFAULT_ADMIN_PASSWORD")
@@ -63,8 +71,7 @@ if not AUTH_FILE.exists():
 
     admin_user = {
         "username": "admin",
-        "password": admin_pw,
-        "password_hash": "",
+        "password_hash": _hash_password(admin_pw),
         "groups": ["admin"],
         "status": "active",
         "email": "admin@example.com",
@@ -128,8 +135,7 @@ def ensure_default_admin():
             admin_pw = admin_pw_env if admin_pw_env and str(admin_pw_env).strip() else _generate_random_password(16)
             admin_user = {
                 "username": "admin",
-                "password": admin_pw,
-                "password_hash": "",
+                "password_hash": _hash_password(admin_pw),
                 "groups": ["admin"],
                 "status": "active",
                 "email": "admin@example.com",
