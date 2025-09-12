@@ -40,6 +40,7 @@ SYSTEM_PERMISSIONS = {
     "admin:history:read": "查看所有執行歷史",
     "admin:codes:read": "查看授權碼",
     "admin:codes:manage": "管理授權碼 (增刪)",
+    "admin:settings:manage": "管理系統設置",
     "workflow:read:*": "讀取所有工作流 (通配符)",
     "workflow:execute:*": "執行所有工作流 (通配符)",
     "user:read:self": "查看自己的用戶信息",
@@ -155,6 +156,57 @@ def ensure_default_admin():
 
 ensure_default_admin()
 
+def update_admin_group_permissions():
+    """更新admin組的權限，確保包含所有SYSTEM_PERMISSIONS"""
+    try:
+        # 重新加載配置以獲取最新狀態
+        load_auth_config()
+        cfg = AUTH_CONFIG if isinstance(AUTH_CONFIG, dict) else {}
+        
+        # 獲取當前的組配置
+        groups = cfg.get("groups", {})
+        if not isinstance(groups, dict):
+            groups = {}
+        
+        # 獲取admin組配置
+        admin_group = groups.get("admin", {})
+        if not isinstance(admin_group, dict):
+            admin_group = {}
+        
+        # 獲取當前的權限列表
+        current_permissions = admin_group.get("permissions", [])
+        if not isinstance(current_permissions, list):
+            current_permissions = []
+        
+        # 獲取系統定義的所有權限
+        system_permissions = list(SYSTEM_PERMISSIONS.keys())
+        
+        # 檢查是否有缺失的權限
+        missing_permissions = [perm for perm in system_permissions if perm not in current_permissions]
+        
+        # 如果有缺失的權限，則更新
+        if missing_permissions:
+            print(f"發現 {len(missing_permissions)} 個缺失的權限，正在更新admin組...")
+            # 合併當前權限和缺失的權限
+            updated_permissions = list(set(current_permissions + missing_permissions))
+            admin_group["permissions"] = updated_permissions
+            groups["admin"] = admin_group
+            cfg["groups"] = groups
+            
+            # 保存更新後的配置
+            AUTH_FILE.parent.mkdir(parents=True, exist_ok=True)
+            with open(AUTH_FILE, "w", encoding="utf-8") as f:
+                json.dump(cfg, f, ensure_ascii=False, indent=2)
+            print("admin組權限更新完成")
+            # 重新加載配置
+            load_auth_config()
+        else:
+            print("admin組權限已是最新的，無需更新")
+    except Exception as e:
+        print(f"警告: 更新admin組權限失敗: {e}")
+
+update_admin_group_permissions()
+
 # 修改 permissions.py 以使用 AUTH_CONFIG.get("groups", {})
 # 而不是直接讀取文件，會更高效和統一
 
@@ -195,6 +247,15 @@ class ConfigManager:
         'http_timeout': 0,
         "cors": ["*"],
     }
+    
+    def get_comfy_server_address(self):
+        """獲取ComfyUI服務器地址"""
+        return self.config.get("comfy_server_address", "YOUR_COMFYUI_SERVER_ADDRESS")
+    
+    def set_comfy_server_address(self, address):
+        """設置ComfyUI服務器地址"""
+        self.config["comfy_server_address"] = address
+        self.save_config()
 
     def __init__(self, config_path: pathlib.Path = CONFIG_FILE):
         self.config_path = config_path

@@ -58,6 +58,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
             re.compile(r"^/api/v1/auth/me/?$"): {}, # 獲取自身信息，由 get_current_identity 處理 (即使沒有 token 也不會 401)
             re.compile(r"^/api/v1/health.*$"): {},
             re.compile(r"^/api/v1/admin/ping/?$"): {"GET": ["admin:access"]}, # 管理員 ping 應該是 admin:access
+            # 系統設置
+            re.compile(r"^/api/v1/admin/settings/comfy-server-address/?$"): {"GET": ["admin:settings:manage"], "PUT": ["admin:settings:manage"]},
         }
 
     async def dispatch(self, request: Request, call_next: Callable[[Request], Awaitable[Any]]):
