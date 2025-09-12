@@ -65,11 +65,23 @@ def require_permissions(required: List[str], match: str = "any"):
         if username == "admin":
             return identity
 
-        # 從 global_data 獲取身分組配置
+        # 從 global_data 獲取最新的身分組配置和用戶信息
         groups_config = global_data.AUTH_CONFIG.get("groups", {})
+        users_config = global_data.AUTH_CONFIG.get("users", [])
+        
+        # 根據用戶名獲取最新的用戶信息
+        current_user = None
+        for user in users_config:
+            if isinstance(user, dict) and user.get("username") == username:
+                current_user = user
+                break
 
-        # 獲取用戶的身分組
-        user_groups = identity.get("groups", [])
+        # 獲取用戶的身分組（優先使用最新的配置，回退到 JWT token 中的信息）
+        user_groups = []
+        if current_user and isinstance(current_user.get("groups"), list):
+            user_groups = current_user["groups"]
+        else:
+            user_groups = identity.get("groups", [])
         if not isinstance(user_groups, list):
             user_groups = []
 
@@ -83,20 +95,55 @@ def require_permissions(required: List[str], match: str = "any"):
                 for perm in group_data["permissions"]:
                     user_permissions.add(perm)
 
-        # 從直接權限字段獲取權限
-        direct_permissions = identity.get("permissions", [])
-        if isinstance(direct_permissions, list):
-            for perm in direct_permissions:
+        # 從用戶直接權限字段獲取權限
+        if current_user and isinstance(current_user.get("permissions"), list):
+            for perm in current_user["permissions"]:
                 user_permissions.add(perm)
+        else:
+            # 回退到 JWT token 中的權限信息
+            direct_permissions = identity.get("permissions", [])
+            if isinstance(direct_permissions, list):
+                for perm in direct_permissions:
+                    user_permissions.add(perm)
 
-        # 從直接角色獲取權限（如果角色也代表權限，此處可保留）
-        # 在新的權限模型中，建議將所有細粒度權限都定義在 groups 中，
-        # roles 僅作為用戶的頂層標識，不再直接作為權限。
-        # 如果需要，可以將 roles 映射到 permissions。
-        user_roles = identity.get("roles", [])
-        if isinstance(user_roles, list):
-            for role in user_roles:
-                user_permissions.add(role) # 可以考慮移除此行，如果 roles 不直接是 permissions
+        # 動態解析用戶角色（基於最新的群組配置）
+        user_roles = set()
+        if current_user and isinstance(current_user.get("roles"), list):
+            user_roles.update(current_user["roles"])
+        else:
+            # 回退到 JWT token 中的角色信息
+            token_roles = identity.get("roles", [])
+            if isinstance(token_roles, list):
+                user_roles.update(token_roles)
+        
+        # 檢查用戶所屬的群組是否具有管理員級別的權限
+        admin_groups = []
+        admin_permission_patterns = ["admin:"]
+        for group_id in user_groups:
+            group_data = groups_config.get(group_id, {})
+            if isinstance(group_data, dict):
+                permissions = group_data.get("permissions", [])
+                has_admin_level_permissions = False
+                for perm in permissions:
+                    if isinstance(perm, str):
+                        for pattern in admin_permission_patterns:
+                            if pattern.endswith(":") and perm.startswith(pattern):
+                                has_admin_level_permissions = True
+                                break
+                            elif pattern.endswith(":*") and perm.startswith(pattern[:-1]):
+                                has_admin_level_permissions = True
+                                break
+                            elif perm == pattern:
+                                has_admin_level_permissions = True
+                                break
+                        if has_admin_level_permissions:
+                            break
+                if has_admin_level_permissions:
+                    admin_groups.append(group_id)
+        
+        # 如果用戶所屬的群組具有管理員級別的權限，則添加 "admin" 角色
+        if admin_groups and "admin" not in user_roles:
+            user_roles.add("admin")
 
         # 驗證權限
         def _check_permission(req_perm: str) -> bool:
