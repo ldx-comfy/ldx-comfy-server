@@ -137,12 +137,28 @@ class AuthMiddleware(BaseHTTPMiddleware):
             logger.debug(f"AuthMiddleware: 用戶 {username} 是管理員，跳過權限檢查")
             return True
 
+        # 從 JWT 中獲取用戶的權限
         user_permissions = identity.get("permissions", []) # JWT 中應該已經包含了所有處理後的細粒度權限
         if not isinstance(user_permissions, list):
             user_permissions = []
         user_permissions_set = set(user_permissions)
 
-        logger.debug(f"AuthMiddleware: 用戶 {username} 的權限: {user_permissions}")
+        # 從 JWT 中獲取用戶的群組
+        user_groups = identity.get("groups", [])
+        if not isinstance(user_groups, list):
+            user_groups = []
+
+        # 從全局配置中獲取群組配置
+        groups_config = global_data.AUTH_CONFIG.get("groups", {})
+
+        # 從群組中解析權限
+        for group_id in user_groups:
+            group_data = groups_config.get(group_id, {})
+            if isinstance(group_data, dict) and "permissions" in group_data:
+                for perm in group_data["permissions"]:
+                    user_permissions_set.add(perm)
+
+        logger.debug(f"AuthMiddleware: 用戶 {username} 的權限: {list(user_permissions_set)}")
         logger.debug(f"AuthMiddleware: 需要的權限: {required_permissions}")
 
         if not required_permissions: # 如果 required_permissions 為空列表，表示只需要身份驗證，不需要特定權限
@@ -178,6 +194,6 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 break
 
         if not any_permission_satisfied:
-            logger.warning(f"AuthMiddleware: 用戶 {username} 權限不足 - 擁有權限: {user_permissions}, 需要權限: {required_permissions}")
+            logger.warning(f"AuthMiddleware: 用戶 {username} 權限不足 - 擁有權限: {list(user_permissions_set)}, 需要權限: {required_permissions}")
 
         return any_permission_satisfied
