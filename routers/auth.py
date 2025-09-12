@@ -64,6 +64,7 @@ class CreateCodeRequest(BaseModel):
 class CodeInfo(BaseModel):
     """授权码信息"""
     code: str = Field(..., description="授权码")
+    name: Optional[str] = Field(default=None, description="授权码名称")
     expires_at: str = Field(..., description="过期时间 (ISO-8601)")
     roles: List[str] = Field(default_factory=list, description="授权码附带角色")
     groups: List[str] = Field(default_factory=list, description="授权码附带身分組")
@@ -385,6 +386,7 @@ async def create_new_code(
 
         return CodeInfo(
             code=new_code_record["code"],
+            name=new_code_record.get("name"),
             expires_at=new_code_record["expires_at"],
             roles=new_code_record["roles"],
             groups=new_code_record["groups"],
