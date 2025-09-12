@@ -37,7 +37,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
             re.compile(r"^/api/v1/forms/admin/history/?$"): {"GET": ["admin:history:read"]},
             re.compile(r"^/api/v1/forms/admin/history/[^/]+/?$"): {"GET": ["admin:history:read"]},
             re.compile(r"^/api/v1/forms/workflows/upload/?$"): {"POST": ["admin:workflows:manage"]},
-            re.compile(r"^/api/v1/forms/workflows/[^/]+/?$"): {"DELETE": ["admin:workflows:manage"]}, # 刪除工作流
+            re.compile(r"^/api/v1/forms/workflows/[^/]+/?$"): {"GET": ["workflow:read:*"], "DELETE": ["admin:workflows:manage"]}, # 獲取和刪除工作流
 
             # 授權碼管理
             re.compile(r"^/api/v1/auth/admin/codes/?$"): {"GET": ["admin:codes:read"], "POST": ["admin:codes:manage"]},
@@ -122,7 +122,9 @@ class AuthMiddleware(BaseHTTPMiddleware):
         返回空列表 [] 表示路由需要身份驗證但不需要特定權限 (例如某些用戶個人信息接口)。
         """
         for pattern, method_perms in self.route_permissions_map.items():
-            if pattern.fullmatch(path):
+            # 使用 match 而不是 fullmatch，並確保匹配整個路徑
+            match = pattern.match(path)
+            if match and match.group(0) == path:
                 return method_perms.get(method)
         return None # 未在 map 中找到匹配的路由
 
