@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from datetime import datetime
 from comfy.plugins import plugin_manager
 from comfy.plugins.workflow_executors import ComfyUIWorkflowExecutor
+import global_data
 router = APIRouter(prefix="/api/v1/health", tags=["健康检查"])
 
 
@@ -80,12 +81,6 @@ async def check_comfyui_health() -> ComfyUIStatus:
 
 
         executor = plugin_manager.get_workflow_executor()
-        # 类型检查：确保是ComfyUIWorkflowExecutor实例
-        if isinstance(executor, ComfyUIWorkflowExecutor):
-            server_address = executor.server_address
-        else:
-            # 如果不是ComfyUIWorkflowExecutor，抛出错误
-            raise ValueError("未找到ComfyUI工作流执行器")
     except Exception as e:
         # 如果无法获取，抛出错误
         raise ValueError(f"无法获取ComfyUI服务器地址: {str(e)}")
@@ -94,7 +89,7 @@ async def check_comfyui_health() -> ComfyUIStatus:
 
     try:
         # 使用GET /system_stats端点检查ComfyUI连通性
-        url = f"http://{server_address}/system_stats"
+        url = f"http://{global_data.config_manager.get_comfy_server_address()}/system_stats"
 
         async with httpx.AsyncClient(timeout=5.0) as client:
             response = await client.get(url)

@@ -3,6 +3,7 @@
 """
 import os
 import httpx
+import global_data
 from typing import Dict, Any, List
 from .base import NodeHandlerPlugin, PluginMetadata
 from logging_config import get_colorful_logger
@@ -29,7 +30,6 @@ class ImageInputHandler(NodeHandlerPlugin):
 
     def initialize(self, config: Dict[str, Any]) -> None:
         """初始化插件"""
-        self.server_address = config.get('server_address')
 
     def cleanup(self) -> None:
         """清理资源"""
@@ -54,7 +54,7 @@ class ImageInputHandler(NodeHandlerPlugin):
         try:
             with open(image_path, 'rb') as f:
                 files = {'image': (os.path.basename(image_path), f)}
-                response = httpx.post(f"http://{self.server_address}/upload/image", files=files)
+                response = httpx.post(f"http://{global_data.config_manager.get_comfy_server_address()}/upload/image", files=files)
 
             if response.status_code == 200:
                 result = response.json()

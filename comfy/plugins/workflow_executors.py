@@ -18,7 +18,6 @@ class ComfyUIWorkflowExecutor(WorkflowExecutorPlugin):
     """ComfyUI工作流执行器插件"""
 
     def __init__(self):
-        self.server_address = "106.52.220.169:6889"
         self.client_id = str(uuid.uuid4())
         self.output_dir = global_data.COMFY_OUTPUT_DIR
         self._active_executions: Dict[str, Dict[str, Any]] = {}
@@ -35,7 +34,6 @@ class ComfyUIWorkflowExecutor(WorkflowExecutorPlugin):
 
     def initialize(self, config: Dict[str, Any]) -> None:
         """初始化插件"""
-        self.server_address = config.get('server_address', self.server_address)
         self.output_dir = config.get('output_dir', self.output_dir)
         os.makedirs(self.output_dir, exist_ok=True)
 
@@ -130,7 +128,7 @@ class ComfyUIWorkflowExecutor(WorkflowExecutorPlugin):
         switch_handler = SwitchInputHandler()
 
         # 初始化处理器
-        image_handler.initialize({'server_address': self.server_address})
+        image_handler.initialize({'server_address': global_data.config_manager.get_comfy_server_address()})
 
         # 查找输入节点
         input_nodes = self._find_input_nodes(workflow_data)
@@ -198,10 +196,10 @@ class ComfyUIWorkflowExecutor(WorkflowExecutorPlugin):
         try:
             if self.ws_timeout is not None:
                 ws.settimeout(self.ws_timeout)
-                ws.connect(f"ws://{self.server_address}/ws?clientId={self.client_id}", timeout=self.ws_timeout)
+                ws.connect(f"ws://{global_data.config_manager.get_comfy_server_address()}/ws?clientId={self.client_id}", timeout=self.ws_timeout)
             else:
                 ws.settimeout(None)  # 无限超时
-                ws.connect(f"ws://{self.server_address}/ws?clientId={self.client_id}")
+                ws.connect(f"ws://{global_data.config_manager.get_comfy_server_address()}/ws?clientId={self.client_id}")
         except Exception as e:
             logger.error(f"WebSocket连接失败: {str(e)}")
             raise
@@ -249,7 +247,7 @@ class ComfyUIWorkflowExecutor(WorkflowExecutorPlugin):
         """将工作流加入队列"""
         p = {"prompt": prompt, "client_id": self.client_id}
         data = json.dumps(p)
-        url = f"http://{self.server_address}/prompt"
+        url = f"http://{global_data.config_manager.get_comfy_server_address()}/prompt"
         timeout = self.http_timeout if self.http_timeout is not None else 30.0
         with httpx.Client(timeout=timeout) as client:
             resp = client.post(url, content=data, headers={"Content-Type": "application/json"})
@@ -262,7 +260,7 @@ class ComfyUIWorkflowExecutor(WorkflowExecutorPlugin):
         
         # 从ComfyUI服务器获取图像数据
         params = {"filename": filename, "subfolder": subfolder, "type": folder_type}
-        url = f"http://{self.server_address}/view"
+        url = f"http://{global_data.config_manager.get_comfy_server_address()}/view"
         timeout = self.http_timeout if self.http_timeout is not None else 30.0
         with httpx.Client(timeout=timeout) as client:
             response = client.get(url, params=params)
@@ -285,7 +283,7 @@ class ComfyUIWorkflowExecutor(WorkflowExecutorPlugin):
 
     def _get_history(self, prompt_id: str) -> Dict[str, Any]:
         """获取执行历史"""
-        url = f"http://{self.server_address}/history/{prompt_id}"
+        url = f"http://{global_data.config_manager.get_comfy_server_address()}/history/{prompt_id}"
         timeout = self.http_timeout if self.http_timeout is not None else 30.0
         with httpx.Client(timeout=timeout) as client:
             response = client.get(url)

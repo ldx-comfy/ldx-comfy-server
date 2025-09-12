@@ -59,7 +59,6 @@ async def lifespan(app: FastAPI):
     # 初始化插件配置
     # 取消超時（ws_timeout/http_timeout 設為 0 或 None 表示無限等待）
     plugin_config = {
-        'server_address': global_data.config_manager.get_comfy_server_address(),
         'output_dir': global_data.COMFY_OUTPUT_DIR,
         'ws_timeout': 0,
         'http_timeout': 0,
@@ -68,7 +67,7 @@ async def lifespan(app: FastAPI):
     logger.info("插件系統初始化完成")
 
     # 檢查ComfyUI後端連通性
-    await check_comfyui_connectivity_on_startup(plugin_config['server_address'])
+    await check_comfyui_connectivity_on_startup(global_data.config_manager.get_comfy_server_address())
 
     yield
 
